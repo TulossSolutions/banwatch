@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.log
+banwatch.db
+config.json
+report.json
+report.csv
+report.html
