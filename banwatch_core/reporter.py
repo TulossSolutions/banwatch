@@ -244,7 +244,15 @@ function toggleTheme(){{
         email = self.cfg["email"]
         try:
             proc = subprocess.run(
-                ["mail", "-s", f"BanWatch Report - {datetime.now().strftime('%Y-%m-%d')}", email],
+                [
+                    "mail",
+                    "--content-type=text/html",
+                    "-s",
+                    f"BanWatch Report - {datetime.now().strftime('%Y-%m-%d')}",
+                    "-r",
+                    "BanWatch <hello@tuloss.com>",
+                    email,
+                ],
                 input=report_html,
                 text=True,
                 capture_output=True,
