@@ -1,11 +1,9 @@
 import html
 import json
 import logging
-import smtplib
+import subprocess
 import urllib.request
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from .paths import REPORT_DIR
 
@@ -245,14 +243,15 @@ function toggleTheme(){{
     def _send_email(self, report_html: str):
         email = self.cfg["email"]
         try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"BanWatch Report - {datetime.now().strftime('%Y-%m-%d')}"
-            msg["From"] = "banwatch@localhost"
-            msg["To"] = email
-            msg.attach(MIMEText(report_html, "html"))
-
-            with smtplib.SMTP("localhost") as s:
-                s.send_message(msg)
+            proc = subprocess.run(
+                ["mail", "-s", f"BanWatch Report - {datetime.now().strftime('%Y-%m-%d')}", email],
+                input=report_html,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}")
             logging.info(f"Report emailed to {email}")
         except Exception as e:
             logging.warning(f"Could not email report: {e}")
