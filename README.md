@@ -99,13 +99,31 @@ BanWatch automatically finds log files for the following services. If your logs 
 ### Databases (8 paths)
 | Service | Default Log File |
 |---------|------------------|
-| **MySQL** | `/var/log/mysql/error.log`, `/var/log/mysql.log` |
+| **MySQL** | `/var/log/mysql/error.log` |
 | **MariaDB** | `/var/log/mariadb/mariadb.log` |
 | **PostgreSQL** | `/var/log/postgresql/postgresql-*.log` |
 | **MongoDB** | `/var/log/mongodb/mongod.log` |
 | **Redis** | `/var/log/redis/redis-server.log` |
 | **Elasticsearch** | `/var/log/elasticsearch/*.log` |
 | **Cassandra** | `/var/log/cassandra/system.log` |
+
+> **PostgreSQL tip — log the client IP:** BanWatch can only block attackers it can *see*. Postgres only includes the remote IP in its log lines when `log_line_prefix` contains `%h`; without it, lines like `FATAL: unsupported frontend protocol` have no IP and can't be attributed. If you haven't already, add `%h` (and `%q` so the user/db fields stop filling after the first line):
+
+> ```bash
+> sudo nano /etc/postgresql/16/main/postgresql.conf
+> ```
+>
+> ```
+> log_line_prefix = '%m [%p] [%h] %q%u@%d '
+> ```
+>
+> then reload:
+>
+> ```bash
+> sudo systemctl reload postgresql
+> ```
+>
+> Check it took effect — a line should now read `[...] [213.209.159.66] [unknown]@[unknown] FATAL: ...`:
 
 ### Other Services
 | Service | Default Log File | What It Detects |
