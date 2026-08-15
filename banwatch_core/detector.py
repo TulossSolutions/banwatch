@@ -61,7 +61,7 @@ class DetectorEngine:
     def _tail(self, service: str, path: str):
         f = None
         try:
-            f = open(path, "r")
+            f = open(path, "r", errors="replace")
             f.seek(0, 2)
             inode = os.fstat(f.fileno()).st_ino
             while self.running:
@@ -72,7 +72,7 @@ class DetectorEngine:
                         stat = os.stat(path)
                         if stat.st_ino != inode or stat.st_size < f.tell():
                             f.close()
-                            f = open(path, "r")
+                            f = open(path, "r", errors="replace")
                             inode = os.fstat(f.fileno()).st_ino
                     except FileNotFoundError:
                         pass
@@ -98,7 +98,7 @@ class DetectorEngine:
                 if not log_path or not Path(log_path).exists():
                     continue
                 try:
-                    with open(log_path, "r") as f:
+                    with open(log_path, "r", errors="replace") as f:
                         for line in f:
                             total_lines += 1
                             self._analyze(svc, line)
