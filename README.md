@@ -8,23 +8,57 @@ BanWatch scans your services, detects brute-force bots in real-time, and automat
 
 ## Install
 
+Requires Python 3.8+ (no pip packages needed) and `sudo`. There are two ways to get the files onto your server.
+
+### 1. Get the files
+
+**Option A — copy from your local machine (git clone or scp):**
+
+```bash
+git clone https://github.com/TulossSolutions/banwatch.git
+cd banwatch
+```
+
+or copy the `banwatch` launcher and `banwatch_core/` folder directly via `scp`.
+
+**Option B — download on the server:**
+
+```bash
+cd /tmp
+curl -L https://github.com/TulossSolutions/banwatch/archive/refs/heads/main.tar.gz | tar xz
+cd banwatch-main
+```
+
+### 2. Install to `/usr/local/bin`
+
 ```bash
 sudo install -m 755 banwatch /usr/local/bin/banwatch
 sudo cp -r banwatch_core /usr/local/bin/
+```
+
+`install -m 755` sets the executable bit even when the file was copied from a system without Unix modes (e.g. Windows over scp). Without it you get `sudo: banwatch: command not found`.
+
+**Windows/scp gotcha:** if you copied files from Windows, the `banwatch` script may have Windows line endings (`\r`), breaking its shebang line. If you see `/usr/bin/env: 'python3\r': No such file or directory`, fix with:
+
+```bash
+sudo sed -i 's/\r$//' /usr/local/bin/banwatch
+```
+
+### 3. Run the setup wizard
+
+```bash
 sudo banwatch setup
 ```
 
-`install -m 755` guarantees the launcher is executable even when the source is copied from a system without Unix file modes (e.g. Windows over scp), which would otherwise cause `sudo: banwatch: command not found`.
+The interactive wizard asks which services to protect, auto-detects log files, picks your firewall (iptables/ufw/nftables), sets quarantine thresholds, manages the allowlist, and optionally configures email or webhook report digests.
 
-If you still hit that error, run `sudo chmod +x /usr/local/bin/banwatch`.
+### Alternative: run without the executable
 
-No pip needed. You can also run BanWatch without relying on the executable bit at all:
+If you'd rather not rely on the installed launcher (or want to run straight from the source tree), use the module directly:
 
 ```bash
-sudo python3 -m banwatch_core setup
+sudo python3 -m banwatch_core setup    # from inside the banwatch/ folder
 ```
-
-The interactive wizard asks which services to protect, auto-detects log files, picks your firewall (iptables/ufw/nftables), sets quarantine thresholds, manages the allowlist, and optionally configures email or webhook report digests.
 
 ---
 
@@ -33,7 +67,8 @@ The interactive wizard asks which services to protect, auto-detects log files, p
 | Command | Description |
 |---------|-------------|
 | `sudo banwatch setup` | Interactive first-time configuration |
-| `sudo banwatch enable [--dry-run]` | Start the background daemon (optionally detect-only) |
+| `sudo banwatch systemd` | Write the systemd unit file (then `systemctl enable --now banwatch`) |
+| `sudo banwatch enable [--dry-run]` | Start the background daemon manually (optionally detect-only) |
 | `sudo banwatch disable` | Stop the daemon |
 | `sudo banwatch status` | Show stats, ban list, and service breakdown |
 | `sudo banwatch release <IP>` | Free an IP from quarantine |
@@ -42,7 +77,6 @@ The interactive wizard asks which services to protect, auto-detects log files, p
 | `banwatch test-line <service> "<log line>"` | Identify which rule(s) match a line |
 | `sudo banwatch allowlist add\|remove <IP/CIDR>` | Manage the allowlist interactively |
 | `sudo banwatch allowlist list` | Show the allowlist |
-| `sudo banwatch systemd` | Write a systemd unit file + print install commands |
 
 ---
 
@@ -102,7 +136,7 @@ All settings are stored in plain JSON. Edit them anytime with any text editor �
 
 ```bash
 sudo nano /etc/banwatch/config.json
-sudo banwatch disable && sudo banwatch enable   # restart to apply
+sudo systemctl restart banwatch   # apply changes (or: banwatch disable && banwatch enable)
 ```
 
 ### Example Config
@@ -206,7 +240,7 @@ Create `/etc/banwatch/rules.json` to override built-in signatures. Patterns are 
 }
 ```
 
-Restart the daemon after editing (`sudo banwatch disable && sudo banwatch enable`). Verify rules anytime:
+Restart the daemon after editing (`sudo systemctl restart banwatch`). Verify rules anytime:
 
 ```bash
 sudo banwatch rules ssh              # show active ssh rules
@@ -285,11 +319,36 @@ Files are saved to `/var/log/banwatch/`. Reports are optionally emailed (local S
 
 ## systemd
 
-Generate and install a systemd service (the unit file uses `Type=forking` with the PID file, and keeps daemon logs in `/var/log/banwatch/`):
+Run BanWatch as a background service that starts automatically on boot. The daemon must be configured first (see [Install](#install)).
 
 ```bash
-sudo banwatch systemd    # writes /etc/systemd/system/banwatch.service + install commands
+# 1. Write the unit file (/etc/systemd/system/banwatch.service)
+sudo banwatch systemd
+
+# 2. Register and start it
+sudo systemctl daemon-reload
+sudo systemctl enable --now banwatch
+
+# 3. Verify
+sudo systemctl status banwatch
+sudo banwatch status
 ```
+
+The unit runs `banwatch enable` (`Type=forking`, PID file `/var/run/banwatch.pid`) and daemon logs go to `/var/log/banwatch/banwatch.log`.
+
+Common systemctl commands:
+
+| Command | What it does |
+|---------|--------------|
+| `sudo systemctl enable --now banwatch` | Start now + auto-start on boot |
+| `sudo systemctl start banwatch` | Start (once) |
+| `sudo systemctl stop banwatch` | Stop |
+| `sudo systemctl restart banwatch` | Restart (applies config edits) |
+| `sudo systemctl disable --now banwatch` | Stop + remove auto-start |
+| `sudo systemctl status banwatch` | Show service state |
+| `journalctl -u banwatch -f` | Follow the service's log output |
+
+Prefer `systemctl` over `sudo banwatch enable`/`disable` when the service is installed — the two can disagree about state (the unit's PID file vs. systemd's view). For manual testing, `sudo banwatch enable` / `disable` work fine without systemd.
 
 ---
 
@@ -298,8 +357,8 @@ sudo banwatch systemd    # writes /etc/systemd/system/banwatch.service + install
 1. **Stop the daemon** (if running) and disable the systemd service (if installed):
 
    ```bash
-   sudo banwatch disable
    sudo systemctl disable --now banwatch 2>/dev/null || true
+   sudo banwatch disable 2>/dev/null || true
    ```
 
 2. **Remove the systemd unit file** (if generated):
