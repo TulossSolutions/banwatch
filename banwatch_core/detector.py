@@ -22,6 +22,7 @@ class DetectorEngine:
         self.patterns = self._compile_patterns()
         self.running = False
         self.threads: List[threading.Thread] = []
+        self.new_bans = 0
 
     def _compile_patterns(self) -> Dict[str, list]:
         compiled = {}
@@ -83,6 +84,28 @@ class DetectorEngine:
             if f:
                 f.close()
 
+    def scan_existing(self) -> dict:
+        """Read all configured log files from the start and analyze every line.
+
+        Returns counts of lines read and newly quarantined IPs. Useful for
+        catching attacks that happened before the daemon first started.
+        """
+        total_lines = 0
+        self.new_bans = 0
+        for svc in self.cfg["services"]:
+            paths = self.cfg["log_paths"].get(svc, [])
+            for log_path in paths:
+                if not log_path or not Path(log_path).exists():
+                    continue
+                try:
+                    with open(log_path, "r") as f:
+                        for line in f:
+                            total_lines += 1
+                            self._analyze(svc, line)
+                except Exception as e:
+                    logging.error(f"Error scanning {log_path}: {e}")
+        return {"lines": total_lines, "new_bans": self.new_bans}
+
     def _analyze(self, service: str, line: str):
         rules = self.patterns.get(service)
         if not rules:
@@ -136,5 +159,6 @@ class DetectorEngine:
                 ban_escalation=self.cfg.get("ban_escalation", 2),
             )
             if is_new:
+                self.new_bans += 1
                 self.fw.block(ip)
                 logging.warning(f"QUARANTINED: {ip} ({service}) - score {score}/{threshold}")

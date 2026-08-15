@@ -73,6 +73,7 @@ sudo python3 -m banwatch_core setup    # from inside the banwatch/ folder
 | `sudo banwatch status` | Show stats, ban list, and service breakdown |
 | `sudo banwatch release <IP>` | Free an IP from quarantine |
 | `sudo banwatch report [--format html\|json\|csv]` | Generate a report (default: html) |
+| `sudo banwatch scan` | Scan existing log files from the start for past attacks |
 | `sudo banwatch rules [service]` | Show active patterns with severity/weight |
 | `banwatch test-line <service> "<log line>"` | Identify which rule(s) match a line |
 | `sudo banwatch allowlist add\|remove <IP/CIDR>` | Manage the allowlist interactively |
@@ -305,7 +306,7 @@ sudo banwatch report --format json   # machine-readable stats + ban list
 sudo banwatch report --format csv    # ban list as CSV
 ```
 
-Files are saved to `/var/log/banwatch/`. Reports are optionally emailed (local SMTP) and/or pushed to **webhooks** as a text digest:
+Files are saved to `/var/log/banwatch/`. Reports are optionally emailed via the system `mail` command and/or pushed to **webhooks** as a text digest:
 
 ```json
 "webhooks": [
@@ -314,6 +315,26 @@ Files are saved to `/var/log/banwatch/`. Reports are optionally emailed (local S
   {"type": "generic", "url": "https://example.com/hook"}
 ]
 ```
+
+---
+
+## Backfill Scan
+
+The daemon **tails** log files — it only reads new lines written after it starts. Attacks logged *before* the daemon's first start are never seen. To catch up on existing log history, run a one-off backfill scan:
+
+```bash
+sudo banwatch scan
+```
+
+This reads every configured log file from the beginning, analyzes every line with the same rules the daemon uses, and quarantines matching IPs (respecting the allowlist, private-IP policy, and dry-run mode). Output reports how many lines were read and how many IPs were newly quarantined:
+
+```
+Scanned 152340 lines, quarantined 3 new IP(s).
+```
+
+Run it once after installing BanWatch on a system that already has log history. Since it reads whole files (including rotations), it can take a while on busy servers; it's safe to stop and re-run, as already-quarantined IPs are skipped.
+
+> **Note:** the scan scores events with the current time, not the log timestamps, so events spread far apart in the log still accumulate within the configured `window`. This is intentional — a historical attacker who hit your postgres once every 90 seconds for an hour should be quarantined, not released because each hit was "too old".
 
 ---
 
@@ -424,7 +445,7 @@ The executable `banwatch` is a small CLI wrapper. Runtime code lives in `banwatc
 | `database.py` | SQLite ban list and attack history |
 | `firewall.py` | `iptables` / `ufw` / `nftables` block and unblock commands |
 | `detector.py` | Log tailing, weighted rule matching, score tracking |
-| `reporter.py` | HTML/JSON/CSV reports, optional SMTP email, webhook digests |
+| `reporter.py` | HTML/JSON/CSV reports, optional `mail` email, webhook digests |
 | `daemon.py` | Background process lifecycle + atomic flock PID lock |
 | `cli.py` | Command-line command dispatch |
 

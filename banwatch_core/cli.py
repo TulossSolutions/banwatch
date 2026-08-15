@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import load_config, save_config
 from .daemon import start_daemon, stop_daemon
 from .database import BanwatchDB
+from .detector import DetectorEngine
 from .firewall import Firewall
 from .paths import PID_FILE
 from .reporter import Reporter
@@ -110,6 +111,20 @@ def cmd_report(format: str):
     reporter = Reporter(db, cfg)
     path = reporter.save_and_maybe_email(format=format)
     print(f"Report generated: {path}")
+
+
+def cmd_scan():
+    sudo_check()
+    cfg = load_config()
+    if not cfg.get("services"):
+        print("Not configured. Run: sudo banwatch setup")
+        sys.exit(1)
+    db = BanwatchDB()
+    fw = Firewall(cfg["firewall"], dry_run=cfg.get("dry_run", False))
+    detector = DetectorEngine(cfg, db, fw)
+    stats = detector.scan_existing()
+    print(f"Scanned {stats['lines']} lines, quarantined {stats['new_bans']} new IP(s).")
+    print("New quarantines will be active firewall rules (unless dry-run is enabled).")
 
 
 def cmd_test_line(service: str, line: str):
@@ -247,6 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_release.add_argument("ip", help="IPv4 address to release")
     p_report = sub.add_parser("report", help="Generate a report")
     p_report.add_argument("--format", choices=["html", "json", "csv"], default="html", help="Report format (default: html)")
+    sub.add_parser("scan", help="Scan existing log files from the start for past attacks")
     p_test = sub.add_parser("test-line", help="Test a log line against a service's rules")
     p_test.add_argument("service", help="Service name, e.g. ssh")
     p_test.add_argument("line", help="Log line to test (quote it)")
@@ -275,6 +291,8 @@ def main():
         cmd_release(args.ip)
     elif args.command == "report":
         cmd_report(args.format)
+    elif args.command == "scan":
+        cmd_scan()
     elif args.command == "test-line":
         cmd_test_line(args.service, args.line)
     elif args.command == "rules":
