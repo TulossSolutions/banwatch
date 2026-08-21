@@ -96,6 +96,7 @@ SERVICE_SIGNATURES = {
             {"pattern": r"FATAL:.*password authentication failed for user \"(?P<user>\w+)\" from (?P<ip>\d+\.\d+\.\d+\.\d+)", "severity": "high"},
             {"pattern": r"FATAL:.*no pg_hba.conf entry for host \"(?P<ip>\d+\.\d+\.\d+\.\d+)\".*user \"(?P<user>\w+)\"", "severity": "critical"},
             {"pattern": r"\[(?P<ip>\d+\.\d+\.\d+\.\d+)\].*unsupported frontend protocol", "severity": "medium"},
+            {"pattern": r"\[(?P<ip>\d+\.\d+\.\d+\.\d+)\].*no PostgreSQL user name specified", "severity": "medium"},
             {"pattern": r"(?P<ip>\d+\.\d+\.\d+\.\d+).*Authentication failed", "severity": "high"},
             {"pattern": r"(?P<ip>\d+\.\d+\.\d+\.\d+).*not authorized", "severity": "medium"},
         ],
