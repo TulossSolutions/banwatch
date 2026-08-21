@@ -18,132 +18,888 @@ class Reporter:
         breakdown = self.db.get_service_breakdown()
         offenders = self.db.get_top_offenders(10)
 
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        services_count = len(self.cfg["services"])
+
+        # ------------------------------------------------------------------
+        # Service breakdown
+        # ------------------------------------------------------------------
         bd_rows = ""
+
         for svc, total, active in breakdown:
             svc_html = html.escape(str(svc).upper())
+            total = int(total)
+            active = int(active)
+
             pct = round((active / max(total, 1)) * 100)
+
             bd_rows += f"""
             <tr>
-                <td>{svc_html}</td>
-                <td>{total}</td>
-                <td><span class="badge active">{active}</span></td>
-                <td>
-                    <div class="bar"><div class="bar-fill" style="width:{pct}%"></div></div>
-                    <small>{pct}% still quarantined</small>
+                <td style="
+                    padding:14px 0;
+                    border-bottom:1px solid #e5e7eb;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:13px;
+                    font-weight:700;
+                    color:#111827;
+                ">
+                    {svc_html}
+                </td>
+
+                <td style="
+                    padding:14px 12px;
+                    border-bottom:1px solid #e5e7eb;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:13px;
+                    color:#4b5563;
+                    text-align:right;
+                ">
+                    {total}
+                </td>
+
+                <td style="
+                    padding:14px 12px;
+                    border-bottom:1px solid #e5e7eb;
+                    text-align:right;
+                ">
+                    <span style="
+                        display:inline-block;
+                        padding:4px 8px;
+                        background:#fef2f2;
+                        color:#dc2626;
+                        border-radius:999px;
+                        font-family:Arial,Helvetica,sans-serif;
+                        font-size:11px;
+                        font-weight:700;
+                    ">
+                        {active} ACTIVE
+                    </span>
+                </td>
+
+                <td style="
+                    padding:14px 0;
+                    border-bottom:1px solid #e5e7eb;
+                    width:42%;
+                ">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                            <td style="
+                                padding:0;
+                                background:#e5e7eb;
+                                border-radius:999px;
+                                height:6px;
+                                line-height:6px;
+                                font-size:0;
+                            ">
+                                <div style="
+                                    width:{pct}%;
+                                    height:6px;
+                                    background:#dc2626;
+                                    border-radius:999px;
+                                    line-height:6px;
+                                    font-size:0;
+                                ">&nbsp;</div>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div style="
+                        margin-top:5px;
+                        font-family:Arial,Helvetica,sans-serif;
+                        font-size:10px;
+                        color:#9ca3af;
+                    ">
+                        {pct}% still quarantined
+                    </div>
                 </td>
             </tr>
             """
 
-        max_events = max((o["events"] for o in offenders), default=1)
+        # ------------------------------------------------------------------
+        # Top offenders
+        # ------------------------------------------------------------------
+        max_events = max(
+            (int(o["events"]) for o in offenders),
+            default=1
+        )
+
         o_rows = ""
+
         for i, entry in enumerate(offenders, start=1):
             ip_html = html.escape(str(entry["ip"]))
             service_html = html.escape(str(entry["service"]).upper())
             events = int(entry["events"])
             last_seen_html = html.escape(str(entry["last_seen"])[:19])
+
             pct = round(events / max(max_events, 1) * 100)
+
+            # Highlight the top 3 ranks.
+            if i == 1:
+                rank_bg = "#dc2626"
+            elif i == 2:
+                rank_bg = "#374151"
+            elif i == 3:
+                rank_bg = "#6b7280"
+            else:
+                rank_bg = "#e5e7eb"
+
+            rank_color = "#ffffff" if i <= 3 else "#4b5563"
+
             o_rows += f"""
             <tr>
-                <td><span class="rank">{i}</span></td>
-                <td><code>{ip_html}</code></td>
-                <td>{service_html}</td>
-                <td>
-                    <div class="events">{events}</div>
-                    <div class="bar"><div class="bar-fill" style="width:{pct}%"></div></div>
+                <td style="
+                    padding:15px 8px 15px 0;
+                    border-bottom:1px solid #e5e7eb;
+                    width:42px;
+                ">
+                    <span style="
+                        display:inline-block;
+                        width:26px;
+                        height:26px;
+                        line-height:26px;
+                        text-align:center;
+                        border-radius:50%;
+                        background:{rank_bg};
+                        color:{rank_color};
+                        font-family:Arial,Helvetica,sans-serif;
+                        font-size:11px;
+                        font-weight:700;
+                    ">
+                        {i}
+                    </span>
                 </td>
-                <td>{last_seen_html}</td>
+
+                <td style="
+                    padding:15px 10px;
+                    border-bottom:1px solid #e5e7eb;
+                ">
+                    <span style="
+                        font-family:'Courier New',Courier,monospace;
+                        font-size:13px;
+                        color:#111827;
+                        font-weight:700;
+                    ">
+                        {ip_html}
+                    </span>
+                </td>
+
+                <td style="
+                    padding:15px 10px;
+                    border-bottom:1px solid #e5e7eb;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:11px;
+                    font-weight:700;
+                    color:#6b7280;
+                ">
+                    {service_html}
+                </td>
+
+                <td style="
+                    padding:15px 10px;
+                    border-bottom:1px solid #e5e7eb;
+                    width:28%;
+                ">
+                    <div style="
+                        font-family:Arial,Helvetica,sans-serif;
+                        font-size:13px;
+                        font-weight:700;
+                        color:#dc2626;
+                    ">
+                        {events}
+                        <span style="
+                            font-size:10px;
+                            font-weight:400;
+                            color:#9ca3af;
+                        ">
+                            events
+                        </span>
+                    </div>
+
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                            <td style="
+                                padding-top:6px;
+                                background:#f1f5f9;
+                                border-radius:999px;
+                                height:4px;
+                                line-height:4px;
+                                font-size:0;
+                            ">
+                                <div style="
+                                    width:{pct}%;
+                                    height:4px;
+                                    background:#dc2626;
+                                    border-radius:999px;
+                                    line-height:4px;
+                                    font-size:0;
+                                ">&nbsp;</div>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+
+                <td style="
+                    padding:15px 0 15px 10px;
+                    border-bottom:1px solid #e5e7eb;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:11px;
+                    color:#6b7280;
+                    white-space:nowrap;
+                ">
+                    {last_seen_html}
+                </td>
             </tr>
             """
 
+        # ------------------------------------------------------------------
+        # Empty states
+        # ------------------------------------------------------------------
+        if not bd_rows:
+            bd_rows = """
+            <tr>
+                <td colspan="4" style="
+                    padding:30px 0;
+                    text-align:center;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:13px;
+                    color:#9ca3af;
+                ">
+                    No service activity recorded.
+                </td>
+            </tr>
+            """
+
+        if not o_rows:
+            o_rows = """
+            <tr>
+                <td colspan="5" style="
+                    padding:30px 0;
+                    text-align:center;
+                    font-family:Arial,Helvetica,sans-serif;
+                    font-size:13px;
+                    color:#9ca3af;
+                ">
+                    No offenders recorded.
+                </td>
+            </tr>
+            """
+
+        # ------------------------------------------------------------------
+        # Email
+        # ------------------------------------------------------------------
         return f"""<!DOCTYPE html>
-<html lang="en" data-theme="light">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BanWatch Report</title>
-<style>
-:root{{--bg:#ffffff;--card:#f8fafc;--accent:#0284c7;--danger:#dc2626;--success:#16a34a;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;--code-bg:#f1f5f9;--hover:rgba(2,132,199,.06)}}
-:root[data-theme="dark"]{{--bg:#0f172a;--card:#1e293b;--accent:#38bdf8;--danger:#ef4444;--success:#22c55e;--text:#e2e8f0;--muted:#94a3b8;--border:#334155;--code-bg:#0f172a;--hover:rgba(56,189,248,.08)}}
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:40px 20px;transition:background .25s,color .25s}}
-.container{{max-width:1100px;margin:0 auto}}
-header{{text-align:center;margin-bottom:40px;position:relative}}
-header h1{{font-size:2.4rem;color:var(--accent);letter-spacing:-1px}}
-header p{{color:var(--muted);margin-top:8px}}
-.theme-toggle{{position:absolute;top:0;right:0;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:.85rem;cursor:pointer;transition:background .25s}}
-.theme-toggle:hover{{background:var(--hover)}}
-.kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;margin-bottom:40px}}
-.kpi{{background:var(--card);padding:28px;border-radius:12px;text-align:center;border:1px solid var(--border);transition:transform .2s}}
-.kpi:hover{{transform:translateY(-3px)}}
-.kpi .num{{font-size:2.8rem;font-weight:800;color:var(--accent)}}
-.kpi .label{{color:var(--muted);font-size:.95rem;margin-top:6px;text-transform:uppercase;letter-spacing:.5px}}
-.kpi.danger .num{{color:var(--danger)}}
-.kpi.success .num{{color:var(--success)}}
-section{{background:var(--card);border-radius:12px;padding:28px;margin-bottom:30px;border:1px solid var(--border)}}
-section h2{{font-size:1.3rem;margin-bottom:18px;color:var(--accent);display:flex;align-items:center;gap:10px}}
-table{{width:100%;border-collapse:collapse;font-size:.95rem}}
-th{{text-align:left;padding:14px 12px;color:var(--muted);font-weight:600;border-bottom:2px solid var(--border);text-transform:uppercase;font-size:.8rem;letter-spacing:.5px}}
-td{{padding:14px 12px;border-bottom:1px solid var(--border);vertical-align:middle}}
-tr:hover td{{background:var(--hover)}}
-code{{background:var(--code-bg);padding:3px 8px;border-radius:4px;font-family:monospace;font-size:.9rem;color:var(--accent)}}
-.rank{{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;font-size:.85rem}}
-.badge{{display:inline-block;padding:4px 10px;border-radius:20px;font-size:.75rem;font-weight:700;text-transform:uppercase}}
-.badge.active{{background:rgba(239,68,68,.15);color:var(--danger)}}
-.badge.released{{background:rgba(34,197,94,.15);color:var(--success)}}
-.bar{{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px;max-width:200px}}
-.bar-fill{{height:100%;background:var(--accent);border-radius:3px}}
-.events{{font-weight:700;color:var(--danger)}}
-.timestamp{{text-align:center;color:var(--muted);margin-top:30px;font-size:.9rem}}
-@media (prefers-color-scheme:dark){{:root:not([data-theme]){{--bg:#0f172a;--card:#1e293b;--accent:#38bdf8;--danger:#ef4444;--success:#22c55e;--text:#e2e8f0;--muted:#94a3b8;--border:#334155;--code-bg:#0f172a;--hover:rgba(56,189,248,.08)}}}}
-</style>
-</head>
-<body>
-<div class="container">
-<header>
-<button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">Toggle Dark</button>
-<h1>BanWatch</h1>
-<p>Security Report - {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
-</header>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <title>BanWatch Security Report</title>
+    </head>
 
-<div class="kpi-grid">
-<div class="kpi"><div class="num">{stats["total_entries"]}</div><div class="label">Total Entries</div></div>
-<div class="kpi danger"><div class="num">{stats["active_quarantined"]}</div><div class="label">Currently Quarantined</div></div>
-<div class="kpi success"><div class="num">{stats["attacks_24h"]}</div><div class="label">Attacks (24h)</div></div>
-<div class="kpi"><div class="num">{len(self.cfg["services"])}</div><div class="label">Services Protected</div></div>
-</div>
+    <body style="
+        margin:0;
+        padding:0;
+        background:#f3f4f6;
+        color:#111827;
+        font-family:Arial,Helvetica,sans-serif;
+    ">
 
-<section>
-<h2>Breakdown by Service</h2>
-<table>
-<tr><th>Service</th><th>Total Quarantined</th><th>Active</th><th>Status</th></tr>
-{bd_rows}
-</table>
-</section>
+    <!-- Preheader -->
+    <div style="
+        display:none;
+        max-height:0;
+        overflow:hidden;
+        opacity:0;
+        color:transparent;
+    ">
+        BanWatch security report — {stats["active_quarantined"]} IPs currently quarantined.
+    </div>
 
-<section>
-<h2>Top 10 Offenders</h2>
-<table>
-<tr><th>#</th><th>IP Address</th><th>Service</th><th>Events</th><th>Last Seen</th></tr>
-{o_rows}
-</table>
-</section>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+           style="background:#f3f4f6;">
+    <tr>
+    <td align="center" style="padding:32px 12px;">
 
-<p class="timestamp">Generated by BanWatch v1.0</p>
-</div>
-<script>
-(function(){{
-  var saved = localStorage.getItem('banwatch-theme');
-  if (saved) {{ document.documentElement.setAttribute('data-theme', saved); }}
-}})();
-function toggleTheme(){{
-  var root = document.documentElement;
-  var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  root.setAttribute('data-theme', next);
-  localStorage.setItem('banwatch-theme', next);
-}}
-</script>
-</body>
-</html>"""
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+           width="100%"
+           style="
+               max-width:900px;
+               background:#ffffff;
+               border:1px solid #e5e7eb;
+           ">
+
+    <!-- ================================================================
+         HEADER
+         ================================================================ -->
+
+    <tr>
+    <td style="
+        padding:28px 32px;
+        background:#111111;
+    ">
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr>
+
+    <td valign="middle">
+
+        <div style="
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:20px;
+            line-height:24px;
+            font-weight:800;
+            letter-spacing:-0.5px;
+            color:#ffffff;
+        ">
+            Ban<span style="color:#ef4444;">Watch</span>
+        </div>
+
+        <div style="
+            margin-top:5px;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:10px;
+            line-height:14px;
+            font-weight:700;
+            letter-spacing:1.5px;
+            color:#9ca3af;
+            text-transform:uppercase;
+        ">
+            Security Intelligence
+        </div>
+
+    </td>
+
+    <td align="right" valign="middle">
+
+        <span style="
+            display:inline-block;
+            padding:6px 10px;
+            border:1px solid #374151;
+            border-radius:999px;
+            color:#d1d5db;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:10px;
+            font-weight:700;
+            letter-spacing:.5px;
+        ">
+            DAILY REPORT
+        </span>
+
+    </td>
+
+    </tr>
+    </table>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         REPORT INTRO
+         ================================================================ -->
+
+    <tr>
+    <td style="padding:34px 32px 22px;">
+
+        <div style="
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:11px;
+            line-height:16px;
+            font-weight:700;
+            letter-spacing:1.2px;
+            text-transform:uppercase;
+            color:#dc2626;
+        ">
+            Security report
+        </div>
+
+        <h1 style="
+            margin:7px 0 0;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:28px;
+            line-height:34px;
+            letter-spacing:-.8px;
+            color:#111827;
+            font-weight:800;
+        ">
+            Threat activity overview
+        </h1>
+
+        <p style="
+            margin:8px 0 0;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:13px;
+            line-height:20px;
+            color:#6b7280;
+        ">
+            Generated {generated_at}
+        </p>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         KPI GRID
+         ================================================================ -->
+
+    <tr>
+    <td style="padding:0 32px 30px;">
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr>
+
+    <!-- Total -->
+    <td width="25%" valign="top" style="padding-right:6px;">
+    <div style="
+        border:1px solid #e5e7eb;
+        background:#fafafa;
+        padding:18px;
+        min-height:82px;
+    ">
+        <div style="
+            font-size:25px;
+            line-height:30px;
+            font-weight:800;
+            color:#111827;
+        ">
+            {stats["total_entries"]}
+        </div>
+
+        <div style="
+            margin-top:5px;
+            font-size:10px;
+            line-height:14px;
+            color:#6b7280;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+            font-weight:700;
+        ">
+            Total entries
+        </div>
+    </div>
+    </td>
+
+    <!-- Quarantined -->
+    <td width="25%" valign="top" style="padding:0 3px;">
+    <div style="
+        border:1px solid #fecaca;
+        background:#fff7f7;
+        padding:18px;
+        min-height:82px;
+    ">
+        <div style="
+            font-size:25px;
+            line-height:30px;
+            font-weight:800;
+            color:#dc2626;
+        ">
+            {stats["active_quarantined"]}
+        </div>
+
+        <div style="
+            margin-top:5px;
+            font-size:10px;
+            line-height:14px;
+            color:#b91c1c;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+            font-weight:700;
+        ">
+            Active quarantine
+        </div>
+    </div>
+    </td>
+
+    <!-- Attacks -->
+    <td width="25%" valign="top" style="padding:0 3px;">
+    <div style="
+        border:1px solid #e5e7eb;
+        background:#fafafa;
+        padding:18px;
+        min-height:82px;
+    ">
+        <div style="
+            font-size:25px;
+            line-height:30px;
+            font-weight:800;
+            color:#111827;
+        ">
+            {stats["attacks_24h"]}
+        </div>
+
+        <div style="
+            margin-top:5px;
+            font-size:10px;
+            line-height:14px;
+            color:#6b7280;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+            font-weight:700;
+        ">
+            Attacks · 24h
+        </div>
+    </div>
+    </td>
+
+    <!-- Services -->
+    <td width="25%" valign="top" style="padding-left:6px;">
+    <div style="
+        border:1px solid #e5e7eb;
+        background:#fafafa;
+        padding:18px;
+        min-height:82px;
+    ">
+        <div style="
+            font-size:25px;
+            line-height:30px;
+            font-weight:800;
+            color:#111827;
+        ">
+            {services_count}
+        </div>
+
+        <div style="
+            margin-top:5px;
+            font-size:10px;
+            line-height:14px;
+            color:#6b7280;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+            font-weight:700;
+        ">
+            Services protected
+        </div>
+    </div>
+    </td>
+
+    </tr>
+    </table>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         ACTIVE ALERT
+         ================================================================ -->
+
+    <tr>
+    <td style="padding:0 32px 30px;">
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+           style="
+               border-left:4px solid #dc2626;
+               background:#fff7f7;
+           ">
+    <tr>
+    <td style="padding:15px 18px;">
+
+        <div style="
+            font-size:11px;
+            line-height:16px;
+            font-weight:800;
+            color:#991b1b;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+        ">
+            Active threat containment
+        </div>
+
+        <div style="
+            margin-top:3px;
+            font-size:13px;
+            line-height:20px;
+            color:#4b5563;
+        ">
+            <strong style="color:#111827;">
+                {stats["active_quarantined"]}
+            </strong>
+            IP addresses are currently quarantined across
+            <strong style="color:#111827;">
+                {services_count}
+            </strong>
+            protected services.
+        </div>
+
+    </td>
+    </tr>
+    </table>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         SERVICE BREAKDOWN
+         ================================================================ -->
+
+    <tr>
+    <td style="padding:0 32px 34px;">
+
+        <div style="
+            padding-bottom:13px;
+            border-bottom:2px solid #111827;
+        ">
+            <span style="
+                font-size:16px;
+                line-height:22px;
+                font-weight:800;
+                color:#111827;
+            ">
+                Service breakdown
+            </span>
+
+            <span style="
+                float:right;
+                font-size:10px;
+                line-height:22px;
+                color:#9ca3af;
+                text-transform:uppercase;
+                letter-spacing:.7px;
+                font-weight:700;
+            ">
+                QUARANTINE STATUS
+            </span>
+        </div>
+
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+            <tr>
+                <td style="
+                    padding:10px 0;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Service
+                </td>
+
+                <td align="right" style="
+                    padding:10px 12px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Total
+                </td>
+
+                <td align="right" style="
+                    padding:10px 12px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Active
+                </td>
+
+                <td style="
+                    padding:10px 0;
+                    width:42%;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Status
+                </td>
+            </tr>
+
+            {bd_rows}
+
+        </table>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         TOP OFFENDERS
+         ================================================================ -->
+
+    <tr>
+    <td style="padding:0 32px 34px;">
+
+        <div style="
+            padding-bottom:13px;
+            border-bottom:2px solid #111827;
+        ">
+            <span style="
+                font-size:16px;
+                line-height:22px;
+                font-weight:800;
+                color:#111827;
+            ">
+                Top offenders
+            </span>
+
+            <span style="
+                float:right;
+                font-size:10px;
+                line-height:22px;
+                color:#9ca3af;
+                text-transform:uppercase;
+                letter-spacing:.7px;
+                font-weight:700;
+            ">
+                TOP 10 BY EVENTS
+            </span>
+        </div>
+
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+
+            <tr>
+                <td style="
+                    padding:10px 8px 10px 0;
+                    width:42px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                ">
+                    #
+                </td>
+
+                <td style="
+                    padding:10px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    IP address
+                </td>
+
+                <td style="
+                    padding:10px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Service
+                </td>
+
+                <td style="
+                    padding:10px;
+                    width:28%;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Events
+                </td>
+
+                <td style="
+                    padding:10px 0 10px 10px;
+                    font-size:10px;
+                    font-weight:700;
+                    color:#9ca3af;
+                    text-transform:uppercase;
+                    letter-spacing:.6px;
+                ">
+                    Last seen
+                </td>
+            </tr>
+
+            {o_rows}
+
+        </table>
+
+    </td>
+    </tr>
+
+    <!-- ================================================================
+         FOOTER
+         ================================================================ -->
+
+    <tr>
+    <td style="
+        padding:22px 32px;
+        background:#111111;
+    ">
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr>
+
+    <td>
+        <div style="
+            font-size:13px;
+            line-height:18px;
+            font-weight:800;
+            color:#ffffff;
+        ">
+            Ban<span style="color:#ef4444;">Watch</span>
+        </div>
+
+        <div style="
+            margin-top:4px;
+            font-size:10px;
+            line-height:15px;
+            color:#6b7280;
+        ">
+            Automated security monitoring &amp; IP quarantine
+        </div>
+    </td>
+
+    <td align="right">
+        <div style="
+            font-size:10px;
+            line-height:15px;
+            color:#6b7280;
+        ">
+            BanWatch v1.0
+        </div>
+
+        <div style="
+            margin-top:3px;
+            font-size:10px;
+            line-height:15px;
+            color:#4b5563;
+        ">
+            Report generated automatically
+        </div>
+    </td>
+
+    </tr>
+    </table>
+
+    </td>
+    </tr>
+
+    </table>
+
+    <!-- Outer footer -->
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+           style="max-width:900px;">
+    <tr>
+    <td align="center" style="padding:18px 20px;">
+
+        <div style="
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:10px;
+            line-height:15px;
+            color:#9ca3af;
+        ">
+            This report was generated by BanWatch.
+            Keep it confidential and intended for authorized recipients only.
+        </div>
+
+    </td>
+    </tr>
+    </table>
+
+    </td>
+    </tr>
+    </table>
+
+    </body>
+    </html>"""
 
     def generate_json(self) -> str:
         stats = self.db.get_stats()
