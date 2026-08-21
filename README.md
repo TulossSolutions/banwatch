@@ -489,15 +489,12 @@ The executable `banwatch` is a small CLI wrapper. Runtime code lives in `banwatc
 | `cli.py` | Command-line command dispatch |
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Log Tail   │────▶│  Weighted   │────▶│  Ban List   │
-│  (threads)  │     │   Matcher   │     │   (SQLite)  │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                                │
-                                         ┌──────▼──────┐
-                                         │  Firewall   │
-                                         │ipt/ufw/nft  │
-                                         └─────────────┘
+┌─────────────┐      ┌─────────────┐     ┌─────────────┐       ┌────────────┐
+│  Log Tail   │ ────>│  Weighted   │────>│  Ban List   │ ────> │  Firewall  │
+│  (threads)  │      │   Matcher   │     │   (SQLite)  │       │ipt/ufw/nft │
+└─────────────┘      └─────────────┘     └─────────────┘       └────────────┘
+                                              
+                                         
 ```
 
 ---
