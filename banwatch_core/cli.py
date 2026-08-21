@@ -3,6 +3,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import __version__
 from .config import load_config, save_config
 from .daemon import start_daemon, stop_daemon
 from .database import BanwatchDB
@@ -251,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="banwatch",
         description="BanWatch - As simple as UFW",
     )
+    parser.add_argument("--version", action="version", version=f"banwatch {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="command", required=True)
 
     sub.add_parser("setup", help="First-time interactive setup")

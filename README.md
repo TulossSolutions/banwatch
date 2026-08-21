@@ -62,6 +62,27 @@ sudo python3 -m banwatch_core setup    # from inside the banwatch/ folder
 
 ---
 
+## Update
+
+Pull the latest files and reinstall them over the existing ones:
+
+```bash
+cd /tmp
+curl -L https://github.com/TulossSolutions/banwatch/archive/refs/heads/main.tar.gz | tar xz
+cd banwatch-main
+sudo install -m 755 banwatch /usr/local/bin/banwatch
+sudo cp -r banwatch_core /usr/local/bin/
+sudo systemctl restart banwatch   # if running as a systemd service
+```
+
+Updates never touch `/etc/banwatch/` (config, rules, database) or `/var/log/banwatch/`. If you copied the files from Windows, re-apply the `\r` fix from step 2 if needed. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release; check the installed version with:
+
+```bash
+banwatch --version
+```
+
+---
+
 ## Commands
 
 | Command | Description |
