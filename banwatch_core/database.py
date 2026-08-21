@@ -11,11 +11,12 @@ class BanwatchDB:
     def __init__(self):
         ensure_dirs()
         self.lock = threading.RLock()
-        self.conn = sqlite3.connect(str(DB_FILE), check_same_thread=False)
+        self.conn = sqlite3.connect(str(DB_FILE), check_same_thread=False, timeout=30)
         self._init_tables()
 
     def _init_tables(self):
         with self.lock:
+            self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS bans (

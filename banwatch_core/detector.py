@@ -77,7 +77,10 @@ class DetectorEngine:
                     except FileNotFoundError:
                         pass
                     continue
-                self._analyze(service, line)
+                try:
+                    self._analyze(service, line)
+                except Exception as e:
+                    logging.error(f"Error analyzing {service} log line: {e}")
         except Exception as e:
             logging.error(f"Error tailing {path}: {e}")
         finally:
@@ -101,7 +104,10 @@ class DetectorEngine:
                     with open(log_path, "r", errors="replace") as f:
                         for line in f:
                             total_lines += 1
-                            self._analyze(svc, line)
+                            try:
+                                self._analyze(svc, line)
+                            except Exception as e:
+                                logging.error(f"Error analyzing {svc} log line: {e}")
                 except Exception as e:
                     logging.error(f"Error scanning {log_path}: {e}")
         return {"lines": total_lines, "new_bans": self.new_bans}
