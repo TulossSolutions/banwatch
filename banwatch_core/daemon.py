@@ -108,11 +108,11 @@ def _acquire_lock():
             fd.close()
             return None
 
-    try:
-        fd.write(str(os.getpid()))
-        fd.flush()
-    except OSError:
-        pass
+    #try:
+    #    fd.write(str(os.getpid()))
+    #    fd.flush()
+    #except OSError:
+    #    pass
     return fd
 
 
@@ -137,10 +137,27 @@ def start_daemon(dry_run: bool = False):
 
     pid = os.fork()
     if pid > 0:
-        time.sleep(0.5)
-        if PID_FILE.exists():
-            print(f"BanWatch enabled (PID {PID_FILE.read_text().strip()})")
-        sys.exit(0)
+        # ✅ NEW: Parent waits for grandchild to write a valid PID
+        for _ in range(50):  # Wait up to 5 seconds
+            time.sleep(0.1)
+            if PID_FILE.exists():
+                try:
+                    child_pid = int(PID_FILE.read_text().strip())
+                    os.kill(child_pid, 0)  # Verify process exists
+                    print(f"BanWatch enabled (PID {child_pid})")
+                    if lock_fd:
+                        lock_fd.close()
+                    sys.exit(0)
+                except (ValueError, ProcessLookupError, PermissionError):
+                    continue
+        print("Error: BanWatch failed to start (PID not valid)")
+        if lock_fd:
+            lock_fd.close()
+        sys.exit(1)
+
+    # ✅ NEW: Close lock fd in child (no longer needed)
+    if lock_fd:
+        lock_fd.close()
 
     os.setsid()
     os.umask(0o077)
@@ -156,6 +173,13 @@ def start_daemon(dry_run: bool = False):
     with open("/dev/null", "a+") as f:
         os.dup2(f.fileno(), sys.stdout.fileno())
         os.dup2(f.fileno(), sys.stderr.fileno())
+    
+    # ✅ PID written HERE (grandchild, after second fork)
+    PID_FILE.write_text(str(os.getpid()))
+    try:
+        PID_FILE.chmod(0o644)
+    except OSError:
+        pass
 
     Daemon(cfg=cfg).run()
 
