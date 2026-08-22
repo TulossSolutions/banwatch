@@ -1003,7 +1003,6 @@ class Reporter:
                 [
                     "mail",
                     "--content-type=text/html",
-                    "-v",
                     "-s",
                     f"BanWatch Report - {datetime.now().strftime('%Y-%m-%d')}",
                     "-r",
@@ -1017,7 +1016,6 @@ class Reporter:
             )
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}")
-                logging.warning(f"Could not email report: {proc.stderr.strip()} - {proc.stdout.strip()} - {proc.returncode}")
             logging.info(f"Report emailed to {email}")
         except Exception as e:
             logging.warning(f"Could not email report: {e}")

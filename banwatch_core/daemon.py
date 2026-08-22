@@ -108,11 +108,6 @@ def _acquire_lock():
             fd.close()
             return None
 
-    #try:
-    #    fd.write(str(os.getpid()))
-    #    fd.flush()
-    #except OSError:
-    #    pass
     return fd
 
 
@@ -154,10 +149,6 @@ def start_daemon(dry_run: bool = False):
         if lock_fd:
             lock_fd.close()
         sys.exit(1)
-
-    # ✅ NEW: Close lock fd in child (no longer needed)
-    if lock_fd:
-        lock_fd.close()
 
     os.setsid()
     os.umask(0o077)
