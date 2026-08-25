@@ -5,6 +5,7 @@ import subprocess
 import urllib.request
 from datetime import datetime
 
+from . import __version__
 from .paths import REPORT_DIR
 
 
@@ -13,6 +14,54 @@ class Reporter:
         self.db = db
         self.cfg = cfg
 
+    def _get_previous_snapshot(self) -> dict:
+        getter = getattr(self.db, "get_latest_report_snapshot", None)
+        return getter() if getter else {}
+
+    def _build_kpi_deltas(self, stats: dict, services_count: int, previous: dict) -> dict:
+        current = {
+            "total_entries": int(stats["total_entries"]),
+            "active_quarantined": int(stats["active_quarantined"]),
+            "attacks_24h": int(stats["attacks_24h"]),
+            "services_protected": int(services_count),
+        }
+        if not previous:
+            return {key: "first report" for key in current}
+
+        deltas = {}
+        for key, value in current.items():
+            delta = value - int(previous.get(key, 0))
+            if delta > 0:
+                deltas[key] = f"+{delta}"
+            elif delta < 0:
+                deltas[key] = str(delta)
+            else:
+                deltas[key] = "0"
+        return deltas
+
+    def _kpi_delta_html(self, delta: str) -> str:
+        if delta == "first report":
+            color = "#9ca3af"
+            label = "first report"
+        elif delta.startswith("+"):
+            color = "#dc2626"
+            label = delta
+        elif delta.startswith("-"):
+            color = "#16a34a"
+            label = delta
+        else:
+            color = "#6b7280"
+            label = "0"
+        return (
+            f'<div style="margin-top:7px;font-size:10px;line-height:14px;color:{color};font-weight:700;">'
+            f'{html.escape(label)} vs previous check</div>'
+        )
+
+    def _save_current_snapshot(self, stats: dict, services_count: int):
+        saver = getattr(self.db, "save_report_snapshot", None)
+        if saver:
+            saver(stats, services_count)
+
     def generate_html(self) -> str:
         stats = self.db.get_stats()
         breakdown = self.db.get_service_breakdown()
@@ -20,6 +69,8 @@ class Reporter:
 
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         services_count = len(self.cfg["services"])
+        previous = self._get_previous_snapshot()
+        deltas = self._build_kpi_deltas(stats, services_count, previous)
 
         # ------------------------------------------------------------------
         # Service breakdown
@@ -386,6 +437,17 @@ class Reporter:
             DAILY REPORT
         </span>
 
+        <div style="
+            margin-top:8px;
+            color:#9ca3af;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:10px;
+            line-height:14px;
+            font-weight:700;
+        ">
+            Generated {generated_at}
+        </div>
+
     </td>
 
     </tr>
@@ -424,16 +486,6 @@ class Reporter:
         ">
             Threat activity overview
         </h1>
-
-        <p style="
-            margin:8px 0 0;
-            font-family:Arial,Helvetica,sans-serif;
-            font-size:13px;
-            line-height:20px;
-            color:#6b7280;
-        ">
-            Generated {generated_at}
-        </p>
 
     </td>
     </tr>
@@ -476,6 +528,7 @@ class Reporter:
         ">
             Total entries
         </div>
+        {self._kpi_delta_html(deltas["total_entries"])}
     </div>
     </td>
 
@@ -507,6 +560,7 @@ class Reporter:
         ">
             Active quarantine
         </div>
+        {self._kpi_delta_html(deltas["active_quarantined"])}
     </div>
     </td>
 
@@ -538,6 +592,7 @@ class Reporter:
         ">
             Attacks · 24h
         </div>
+        {self._kpi_delta_html(deltas["attacks_24h"])}
     </div>
     </td>
 
@@ -569,6 +624,7 @@ class Reporter:
         ">
             Services protected
         </div>
+        {self._kpi_delta_html(deltas["services_protected"])}
     </div>
     </td>
 
@@ -853,7 +909,7 @@ class Reporter:
             line-height:15px;
             color:#6b7280;
         ">
-            BanWatch v1.0
+            BanWatch v{__version__}
         </div>
 
         <div style="
@@ -950,6 +1006,8 @@ class Reporter:
         logging.info(f"Report saved: {path}")
 
         html_report = self.generate_html() if format != "html" else report
+        stats = self.db.get_stats()
+        self._save_current_snapshot(stats, len(self.cfg["services"]))
         if self.cfg.get("email"):
             self._send_email(html_report)
         if self.cfg.get("webhooks"):

@@ -38,6 +38,14 @@ class BanwatchDB:
                 );
                 CREATE INDEX IF NOT EXISTS idx_attacks_ip ON attacks(ip);
                 CREATE INDEX IF NOT EXISTS idx_attacks_time ON attacks(timestamp);
+                CREATE TABLE IF NOT EXISTS report_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generated_at TEXT,
+                    total_entries INTEGER,
+                    active_quarantined INTEGER,
+                    attacks_24h INTEGER,
+                    services_protected INTEGER
+                );
             """
             )
             self.conn.commit()
@@ -132,6 +140,38 @@ class BanwatchDB:
             "by_service": dict(by_service),
             "attacks_24h": recent,
         }
+
+    def get_latest_report_snapshot(self) -> dict:
+        with self.lock:
+            cur = self.conn.execute(
+                """
+                SELECT generated_at, total_entries, active_quarantined, attacks_24h, services_protected
+                FROM report_snapshots ORDER BY id DESC LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            cols = [c[0] for c in cur.description]
+            return dict(zip(cols, row))
+
+    def save_report_snapshot(self, stats: dict, services_protected: int):
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO report_snapshots (
+                    generated_at, total_entries, active_quarantined, attacks_24h, services_protected
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now().isoformat(),
+                    int(stats["total_entries"]),
+                    int(stats["active_quarantined"]),
+                    int(stats["attacks_24h"]),
+                    int(services_protected),
+                ),
+            )
+            self.conn.commit()
 
     def get_ban_list(self, limit: int = 50) -> List[dict]:
         with self.lock:

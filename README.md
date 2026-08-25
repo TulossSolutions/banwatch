@@ -1,77 +1,191 @@
-# 🔒 BanWatch
+# BanWatch
 
-**Defensive security as simple as UFW.**
+**A lightweight Fail2ban alternative that feels as simple as UFW.**
 
-BanWatch scans your services, detects brute-force bots in real-time, and automatically quarantines attackers. No external dependencies. One command to set up, one command to run.
+BanWatch watches SSH, web, database, mail, FTP, and VPN logs, scores suspicious activity, and automatically quarantines attacking IPs with `ufw`, `iptables`, or `nftables`. It is built for admins who want brute-force protection without managing Fail2ban jails, filters, actions, and regex plumbing.
+
+Use BanWatch when you are searching for:
+
+- a simpler Fail2ban replacement for Linux servers
+- automatic IP banning for SSH, Nginx, Apache, PostgreSQL, MySQL, mail, FTP, or VPN logs
+- UFW-friendly brute-force protection with an interactive setup wizard
+- self-hosted intrusion prevention with no external Python packages
+- HTML/email security reports and webhook digests
+
+---
+
+## Quickstart
+
+Fast path for a Linux server with Python 3.8+, `sudo`, and either `ufw`, `iptables`, or `nftables` available:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo sh
+sudo banwatch setup
+sudo banwatch systemd
+sudo systemctl daemon-reload
+sudo systemctl enable --now banwatch
+sudo banwatch status
+```
+
+Want to validate first without touching firewall rules?
+
+```bash
+sudo banwatch enable --dry-run
+sudo banwatch status
+```
+
+---
+
+## Features
+
+- **Fail2ban-style protection, simpler workflow:** one setup wizard, plain JSON config, direct CLI commands.
+- **Real-time log monitoring:** tails new log lines and handles multiple files per service.
+- **Weighted detection rules:** high-confidence auth failures count more than low-signal noise.
+- **Automatic quarantine:** blocks attackers with `ufw`, `iptables`, `nftables`, or detect-only mode.
+- **Allowlist and private-IP safeguards:** protect admin IPs, load balancers, VPN ranges, and private networks.
+- **Ban duration and escalation:** temporary bans can grow longer for repeat offenders.
+- **Backfill scanning:** scan existing logs once after installation to catch historical attackers.
+- **Custom rules:** override or extend signatures with `/etc/banwatch/rules.json`.
+- **Reports:** HTML, JSON, CSV, email reports, and Slack/Discord/generic webhooks.
+- **systemd support:** generate a unit file and run BanWatch automatically on boot.
+- **No external Python packages:** runs on the Python standard library.
+
+---
+
+## Supported OS
+
+BanWatch is designed for Linux servers because it reads Linux service logs and controls Linux firewalls.
+
+| OS / Platform | Status | Notes |
+|---------------|--------|-------|
+| Debian 11/12 | Supported | Recommended target; works with `ufw`, `iptables`, or `nftables` |
+| Ubuntu 20.04/22.04/24.04 | Supported | Recommended target; common paths auto-detected |
+| RHEL / Rocky / AlmaLinux 8/9 | Supported | Uses `/var/log/secure` for SSH; firewall backend depends on installed tools |
+| Fedora / CentOS Stream | Expected | Should work when Python 3.8+ and firewall tools are present |
+| Arch Linux | Expected | May need custom `log_paths` depending on service configuration |
+| Containers | Limited | Needs host log and firewall access; not the recommended deployment model |
+| macOS / Windows | Not supported for protection | Useful only for development or copying files to a Linux server |
+
+Minimum runtime: Python 3.8+, root privileges, readable service logs, and one firewall backend (`ufw`, `iptables`, `nftables`) unless using `firewall: none` or `--dry-run`.
 
 ---
 
 ## Install
 
-Requires Python 3.8+ (no pip packages needed) and `sudo`. There are two ways to get the files onto your server.
+Requires Python 3.8+ and `sudo`. BanWatch has no external Python package dependencies.
 
-### 1. Get the files
+### Recommended: install script
 
-**Option A — copy from your local machine (git clone or scp):**
-
-```bash
-git clone https://github.com/TulossSolutions/banwatch.git
-cd banwatch
-```
-
-or copy the `banwatch` launcher and `banwatch_core/` folder directly via `scp`.
-
-**Option B — download on the server:**
+The simplest installation path downloads the current source release, installs the CLI wrapper, and places the Python package under `/usr/local/lib/banwatch`:
 
 ```bash
-cd /tmp
-curl -L https://github.com/TulossSolutions/banwatch/archive/refs/heads/main.tar.gz | tar xz
-cd banwatch-main
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo sh
 ```
 
-### 2. Install to `/usr/local/bin`
-
-```bash
-sudo install -m 755 banwatch /usr/local/bin/banwatch
-sudo cp -r banwatch_core /usr/local/bin/
-```
-
-`install -m 755` sets the executable bit even when the file was copied from a system without Unix modes (e.g. Windows over scp). Without it you get `sudo: banwatch: command not found`.
-
-**Windows/scp gotcha:** if you copied files from Windows, the `banwatch` script may have Windows line endings (`\r`), breaking its shebang line. If you see `/usr/bin/env: 'python3\r': No such file or directory`, fix with:
-
-```bash
-sudo sed -i 's/\r$//' /usr/local/bin/banwatch
-```
-
-### 3. Run the setup wizard
+Then run the interactive setup:
 
 ```bash
 sudo banwatch setup
 ```
 
-The interactive wizard asks which services to protect, auto-detects log files, picks your firewall (iptables/ufw/nftables), sets quarantine thresholds, manages the allowlist, and optionally configures email or webhook report digests.
-
-### Alternative: run without the executable
-
-If you'd rather not rely on the installed launcher (or want to run straight from the source tree), use the module directly:
+Optional one-shot install flows:
 
 ```bash
-sudo python3 -m banwatch_core setup    # from inside the banwatch/ folder
+# Install files, then immediately run setup
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo env RUN_SETUP=1 sh
+
+# Install files, write the systemd unit, and start the service
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo env INSTALL_SYSTEMD=1 START_SERVICE=1 sh
 ```
 
----
+The script is intentionally small and POSIX `sh` compatible. It installs:
+
+| Path | Purpose |
+|------|---------|
+| `/usr/local/bin/banwatch` | Executable launcher |
+| `/usr/local/lib/banwatch/banwatch_core/` | Python runtime package |
+
+Config, rules, database, and reports are still created at runtime under `/etc/banwatch/` and `/var/log/banwatch/`.
+
+### Install script options
+
+Environment variables let you customize the install without editing the script:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PREFIX` | `/usr/local` | Base install prefix |
+| `BIN_DIR` | `$PREFIX/bin` | Where the `banwatch` launcher is written |
+| `LIB_ROOT` | `$PREFIX/lib/banwatch` | Where `banwatch_core/` is installed |
+| `BANWATCH_REPO` | `https://github.com/TulossSolutions/banwatch` | Repository to download when not run from a checkout |
+| `BANWATCH_REF` | `main` | Branch/ref downloaded by the install script |
+| `RUN_SETUP` | `0` | Set `1` to run `banwatch setup` after installing |
+| `INSTALL_SYSTEMD` | `0` | Set `1` to write the systemd unit after installing |
+| `START_SERVICE` | `0` | Set `1` with `INSTALL_SYSTEMD=1` to enable and start the service |
+
+Example pinned branch/ref install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo env BANWATCH_REF=main sh
+```
+
+### Alternative: git clone then install locally
+
+```bash
+git clone https://github.com/TulossSolutions/banwatch.git
+cd banwatch
+sudo sh install.sh
+sudo banwatch setup
+```
+
+When run from a checkout, `install.sh` uses the local files instead of downloading an archive.
+
+### Alternative: manual source install
+
+```bash
+sudo install -m 755 banwatch /usr/local/bin/banwatch
+sudo mkdir -p /usr/local/lib/banwatch
+sudo rm -rf /usr/local/lib/banwatch/banwatch_core
+sudo cp -r banwatch_core /usr/local/lib/banwatch/
+```
+
+If you use the manual layout above, make sure your launcher can import `/usr/local/lib/banwatch/banwatch_core`. The install script generates that launcher automatically, which is why it is preferred.
+
+### Alternative: run from the source tree
+
+Useful for development or testing before installing globally:
+
+```bash
+sudo python3 -m banwatch_core setup
+sudo python3 -m banwatch_core enable --dry-run
+```
+
+### Installation UX roadmap
+
+The install script is now the easiest path. Longer term, the most user-friendly production install would be a signed `.deb` package and then an APT repository:
+
+| Option | User command | Best for | Notes |
+|--------|--------------|----------|-------|
+| Install script | `curl -fsSL .../install.sh | sudo sh` | Fast first install | Implemented; simple and auditable |
+| `.deb` package | `sudo apt install ./banwatch.deb` | Debian/Ubuntu | Handles files, permissions, man page, systemd unit, uninstall cleanly |
+| APT repository | `sudo apt install banwatch` | Production users | Best long-term UX for updates and trust, but requires repo signing/release process |
+| PyPI / pipx | `sudo pipx install banwatch` | Python users | Nice Python packaging, but firewall/systemd integration still needs post-install steps |
+| Homebrew/Linuxbrew | `brew install banwatch` | Dev/admin laptops | Convenient, less ideal for minimal servers |
+| Container image | `docker run ...` | Testing only | Awkward for host logs and firewall control; not recommended as primary install |
+
+### Windows/scp gotcha
+
+If you copied files from Windows, the `banwatch` script may have Windows line endings (`\r`), breaking its shebang line. If you see `/usr/bin/env: 'python3\r': No such file or directory`, fix with:
+
+```bash
+sudo sed -i 's/\r$//' /usr/local/bin/banwatch
+```
 
 ## Update
 
 Pull the latest files and reinstall them over the existing ones:
 
 ```bash
-cd /tmp
-curl -L https://github.com/TulossSolutions/banwatch/archive/refs/heads/main.tar.gz | tar xz
-cd banwatch-main
-sudo install -m 755 banwatch /usr/local/bin/banwatch
-sudo cp -r banwatch_core /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/TulossSolutions/banwatch/main/install.sh | sudo sh
 sudo systemctl restart banwatch   # if running as a systemd service
 ```
 
@@ -432,7 +546,7 @@ Prefer `systemctl` over `sudo banwatch enable`/`disable` when the service is ins
 
    ```bash
    sudo rm -f /usr/local/bin/banwatch
-   sudo rm -rf /usr/local/bin/banwatch_core
+   sudo rm -rf /usr/local/lib/banwatch
    ```
 
 4. **Remove configuration, reports, and logs** (this deletes the ban list and attack history):
