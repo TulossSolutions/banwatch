@@ -12,6 +12,7 @@ from .detector import DetectorEngine
 from .firewall import Firewall
 from .paths import PID_FILE, REPORT_DIR
 from .reporter import Reporter
+from .monitoring import write_health
 from .utils import sudo_check
 
 try:
@@ -60,9 +61,8 @@ class Daemon:
 
         self.detector.start()
 
-        freq = self.cfg.get("report_frequency", "weekly")
-        interval_hours = {"daily": 24, "weekly": 168, "monthly": 720}.get(freq, 168)
-        next_report = time.time() + interval_hours * 3600
+        self.db.next_report_due(self.reporter.scope, self.reporter.interval, time.time())
+        next_health_check = 0
         next_expiry_check = time.time() + 30
 
         try:
@@ -71,9 +71,13 @@ class Daemon:
                 if time.time() >= next_expiry_check:
                     self._expire_due_bans()
                     next_expiry_check = time.time() + 30
-                if time.time() >= next_report:
-                    self.reporter.save_and_maybe_email()
-                    next_report = time.time() + interval_hours * 3600
+                if time.time() >= next_health_check:
+                    try:
+                        write_health(self.detector)
+                        self.reporter.run_scheduled()
+                    except Exception:
+                        logging.exception('Could not update report health or schedule')
+                    next_health_check = time.time() + 30
         except KeyboardInterrupt:
             pass
         finally:
@@ -87,6 +91,8 @@ class Daemon:
 
     def _expire_due_bans(self):
         """Unblock quarantined IPs whose ban duration has elapsed (repeat offenders are re-banned with escalation)."""
+        if self.cfg.get('dry_run') or self.cfg.get('firewall') == 'none':
+            return
         for ip in self.db.get_expired():
             if self.fw.unblock(ip):
                 self.db.mark_expired(ip)

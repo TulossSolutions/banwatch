@@ -1,5 +1,7 @@
 import glob
 import json
+import re
+from email.utils import parseaddr
 from pathlib import Path
 from typing import List
 
@@ -16,6 +18,8 @@ DEFAULT_CONFIG = {
     "log_paths": {},
     "allowlist": ["127.0.0.1"],
     "email": None,
+    "email_from": "BanWatch <hello@tuloss.com>",
+    "report_hostname": None,
     "report_frequency": "weekly",
     "daemon": False,
     "dry_run": False,
@@ -30,6 +34,21 @@ DEFAULT_CONFIG = {
 
 def validate_config(cfg: dict) -> dict:
     cfg = {**DEFAULT_CONFIG, **cfg}
+
+    for key in ('email', 'email_from'):
+        value = cfg.get(key)
+        if key == 'email' and not value:
+            continue
+        if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError(key + ' must be a single email address without control characters')
+        name, address = parseaddr(value)
+        if not re.fullmatch(r'[A-Za-z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+', address) or address.startswith('-'):
+            raise ValueError(key + ' must contain a valid email address')
+        if key == 'email' and value != address:
+            raise ValueError('email must contain a bare recipient address')
+    hostname = cfg.get('report_hostname')
+    if hostname is not None and (not isinstance(hostname, str) or not hostname or len(hostname) > 253 or any(ord(c) < 32 for c in hostname)):
+        raise ValueError('report_hostname must be a nonempty hostname without control characters')
 
     if cfg["firewall"] not in {"iptables", "ufw", "nftables", "none"}:
         raise ValueError("firewall must be one of: iptables, ufw, nftables, none")
@@ -127,6 +146,8 @@ def save_config(cfg: dict):
             "threshold": "Score threshold for quarantine (sum of rule weights within window)",
             "window": "Seconds to count attempts within (integer)",
             "email": "Report recipient (string) or null to disable",
+            "email_from": "Report sender, optionally Name <address>; configure an authorized sender domain",
+            "report_hostname": "Optional server label in report headers and email subjects",
             "report_frequency": "daily, weekly, or monthly",
             "dry_run": "Detect and report only; never modify the firewall (true/false)",
             "block_private": "Allow quarantining private/loopback IPs (true/false, default false)",

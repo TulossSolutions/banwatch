@@ -1,3 +1,6 @@
+import ipaddress
+import json
+import shlex
 import subprocess
 import sys
 from typing import List
@@ -61,7 +64,7 @@ class Firewall:
             return 1
 
     def _iptables_rule(self, ip: str) -> List[str]:
-        return ["iptables", "INPUT", "-s", ip, "-j", "DROP"]
+        return ["INPUT", "-s", ip, "-j", "DROP"]
 
     def _iptables_block(self, ip: str) -> bool:
         if self._run(["iptables", "-C", *self._iptables_rule(ip)]) == 0:
@@ -113,3 +116,39 @@ class Firewall:
             timeout=10,
         )
         return any(ip in line for line in proc.stdout.splitlines())
+
+    def audit(self, active_ips):
+        """Read rule presence only; never repair or assert packet-path effectiveness."""
+        if self.dry_run or self.backend == 'none':
+            return {'status': 'detection only', 'present': 0, 'expected': len(active_ips)}
+        try:
+            if self.backend in ('iptables', 'ufw'):
+                if self.backend == 'ufw':
+                    state = subprocess.run(['ufw', 'status'], capture_output=True, text=True, timeout=10, check=True)
+                    if not any(line.strip() == 'Status: active' for line in state.stdout.splitlines()):
+                        return {'status': 'disabled or unverified', 'expected': len(active_ips)}
+                proc = subprocess.run(['iptables-save', '-t', 'filter'], capture_output=True, text=True, timeout=10, check=True)
+                chain = 'INPUT' if self.backend == 'iptables' else 'ufw-user-input'
+                found = set()
+                for line in proc.stdout.splitlines():
+                    parts = shlex.split(line)
+                    if len(parts) == 6 and parts[:3] == ['-A', chain, '-s'] and parts[4:] == ['-j', 'DROP']:
+                        network = ipaddress.ip_network(parts[3], strict=False)
+                        if network.version == 4 and network.prefixlen == 32:
+                            found.add(str(network.network_address))
+            else:
+                proc = subprocess.run(['nft', '-j', 'list', 'table', 'inet', 'banwatch'], capture_output=True, text=True, timeout=10, check=True)
+                objects = json.loads(proc.stdout)['nftables']
+                sets = [o['set'] for o in objects if 'set' in o and o['set'].get('name') == 'banned']
+                chains = [o['chain'] for o in objects if 'chain' in o and o['chain'].get('name') == 'drop' and o['chain'].get('hook') == 'input']
+                linked = any(o.get('rule', {}).get('chain') == 'drop' and
+                             {'match': {'op': '==', 'left': {'payload': {'protocol': 'ip', 'field': 'saddr'}}, 'right': '@banned'}} in o['rule'].get('expr', []) and
+                             {'drop': None} in o['rule'].get('expr', []) for o in objects if 'rule' in o)
+                if not sets or not chains or not linked:
+                    return {'status': 'unverified', 'expected': len(active_ips)}
+                found = {e for s in sets for e in s.get('elem', []) if isinstance(e, str)}
+            missing = set(active_ips) - found
+            return {'status': 'rules found' if not missing else 'rules missing',
+                    'present': len(set(active_ips) & found), 'expected': len(active_ips), 'missing': len(missing)}
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            return {'status': 'unverified', 'expected': len(active_ips)}

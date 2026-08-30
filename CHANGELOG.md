@@ -4,6 +4,37 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.6.0] - 2026-08-31
+
+### Added
+- Period-based reports with hostname, timezone, equal-duration comparisons, ban lifecycle counts, reasons and expirations
+- Read-only firewall rule checks and daemon heartbeat monitoring for configured log readers
+- Multipart text/HTML email via sendmail, configurable email_from and report_hostname
+- Persistent report scheduling with retries after 15 and 30 minutes, surviving daemon restarts
+- Regression tests for reporting, SQLite migration, timezone boundaries, mail failures, monitoring and firewall transitions
+
+### Changed
+- Compact responsive email layout without the redundant Active threat containment banner or repeated ACTIVE labels
+- Reporting split into data collection, rendering, delivery and monitoring modules
+- Events and top IPs use the configured reporting period (24 hours, 7 days or 30 days)
+- HTML/email KPI references advance only after successful primary delivery or local saving when no delivery is configured
+- JSON/CSV exports no longer send notifications or change the HTML report reference
+- New ban/release/expiry activity is tracked from this upgrade; historical transitions are not invented
+
+### Fixed
+- 24-hour counts now use indexed epoch timestamps instead of comparing incompatible date strings
+- Legacy attack times are converted using the server's local timezone while retaining the original timestamp column
+- iptables command construction no longer repeats the executable name
+- Failed firewall operations no longer produce new quarantine/release records; repeat bans reapply the firewall rule
+- Detection-only mode no longer creates new active quarantine records
+
+### Upgrade Notes
+- Back up /etc/banwatch before upgrading; migration is additive and preserves existing history
+- Old wall-clock timestamps cannot disambiguate repeated daylight-saving hours; new events use unambiguous epoch times
+- KPI references restart because their definitions changed; the first successful HTML report establishes a new reference
+- Existing database/firewall discrepancies are reported, never automatically repaired or re-applied in bulk
+- Without sendmail, GNU mail remains available as an HTML-only fallback; transport acceptance is not delivery confirmation
+
 ## [0.5.0] - 2026-08-30
 
 ### Added

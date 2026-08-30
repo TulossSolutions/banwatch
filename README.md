@@ -447,11 +447,14 @@ sudo banwatch allowlist remove 10.0.0.0/8
 ## Reports
 
 Reports include:
-- **Total entries** — all-time quarantines
-- **Currently quarantined** — active blocks
-- **Attacks (24h)** — recent activity
-- **Breakdown by service** — SSH / Web / Database / FTP / Mail / VPN with active counts
-- **Recent ban entries** — last 100 IPs with status
+- **IPs ever banned** and **active bans** recorded in SQLite, compared with the previous successful HTML report.
+- **Events in the period**, compared with the preceding equal-duration period: 24 hours, 7 days or 30 days according to `report_frequency`.
+- **Monitored services**, verified from a current daemon heartbeat and the state of every configured log reader. An idle readable log is healthy; a missing, stopped or unverified reader is not.
+- **Service breakdown** with period events, current active counts, reader availability, last read and errors since daemon start.
+- **Top IPs in the period**, with current ban status, reason and expiration; new, repeat, released and expired ban counts.
+- **Read-only firewall checks** identifying active database entries without matching rules. Rule presence does not establish packet-path ordering or effective delivery, and discrepancies are never repaired automatically.
+
+The header and email subject identify the server, report frequency and timezone. The layout switches to two KPI columns on mobile. No repeated containment banner is included.
 
 ```bash
 sudo banwatch report                 # HTML (default)
@@ -459,7 +462,17 @@ sudo banwatch report --format json   # machine-readable stats + ban list
 sudo banwatch report --format csv    # ban list as CSV
 ```
 
-Files are saved to `/var/log/banwatch/`. Reports are optionally emailed via the system `mail` command and/or pushed to **webhooks** as a text digest:
+Files are saved to `/var/log/banwatch/`. HTML reports can be emailed as multipart text/HTML via the system `sendmail` interface and/or pushed to **webhooks** as a text digest. GNU `mail` is retained as an HTML-only fallback when `sendmail` is unavailable.
+
+Set `email_from` to an authorized sender (default `BanWatch <hello@tuloss.com>`) and optionally set `report_hostname` to a recognizable server label. These fields are validated to reject header injection. A successful email means the local transport accepted it, not that the recipient received it.
+
+JSON and CSV commands are local exports: they do not send emails/webhooks or update the HTML/email comparison reference. The first successful HTML report establishes that reference. Email failures leave it unchanged; webhook failures do not cause duplicate email retries after an email was accepted. With webhook-only delivery, all configured hooks must accept the report before its reference advances.
+
+Automatic report deadlines are persisted in SQLite. Failures retry after 15 minutes, then 30 minutes; after three failed attempts the next normal interval is scheduled. Restarting the daemon no longer postpones an existing deadline.
+
+The 0.6.0 migration preserves legacy timestamps and adds an indexed epoch value using the server's local timezone. Repeated daylight-saving hours in old timezone-free records cannot be reconstructed exactly; new events are unambiguous. Ban lifecycle counts start at migration time because historical release/expiry times were not recorded. The new metric definitions establish a fresh KPI reference. Take a consistent database backup before upgrading.
+
+Webhook configuration:
 
 ```json
 "webhooks": [
@@ -598,7 +611,10 @@ The executable `banwatch` is a small CLI wrapper. Runtime code lives in `banwatc
 | `database.py` | SQLite ban list and attack history |
 | `firewall.py` | `iptables` / `ufw` / `nftables` block and unblock commands |
 | `detector.py` | Log tailing, weighted rule matching, score tracking |
-| `reporter.py` | HTML/JSON/CSV reports, optional `mail` email, webhook digests |
+| `reporter.py` | One data snapshot per report, exports, KPI references and scheduling |
+| `report_views.py` | Responsive email HTML and plain-text rendering |
+| `report_delivery.py` | Multipart email transport and webhook delivery |
+| `monitoring.py` | Read-only reader health and daemon heartbeat |
 | `daemon.py` | Background process lifecycle + atomic flock PID lock |
 | `cli.py` | Command-line command dispatch |
 

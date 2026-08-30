@@ -101,8 +101,10 @@ def cmd_release(ip: str):
     cfg = load_config()
     fw = Firewall(cfg["firewall"], dry_run=cfg.get("dry_run", False))
 
+    if cfg.get('dry_run') or cfg.get('firewall') == 'none' or not fw.unblock(ip):
+        print('Release not confirmed by the firewall; quarantine record retained.')
+        return
     db.release(ip)
-    fw.unblock(ip)
     print(f"Released {ip} from quarantine.")
 
 

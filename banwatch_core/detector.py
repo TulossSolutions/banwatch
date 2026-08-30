@@ -23,6 +23,8 @@ class DetectorEngine:
         self.running = False
         self.threads: List[threading.Thread] = []
         self.new_bans = 0
+        self.health_lock = threading.Lock()
+        self.reader_health = {}
 
     def _compile_patterns(self) -> Dict[str, list]:
         compiled = {}
@@ -45,7 +47,7 @@ class DetectorEngine:
         self.running = True
         for svc in self.cfg["services"]:
             paths = self.cfg["log_paths"].get(svc, [])
-            watched = [p for p in paths if p and Path(p).exists()]
+            watched = list(dict.fromkeys(p for p in paths if p))
             if watched:
                 for log_path in watched:
                     t = threading.Thread(target=self._tail, args=(svc, log_path), daemon=True)
@@ -58,12 +60,27 @@ class DetectorEngine:
     def stop(self):
         self.running = False
 
+    def health_snapshot(self):
+        with self.health_lock:
+            return {key: dict(value) for key, value in self.reader_health.items()}
+
+    def _reader_state(self, service, path, state, read=False, error=False):
+        with self.health_lock:
+            row = self.reader_health.setdefault(service + ':' + path, {'last_read': 0, 'errors': 0})
+            row['state'] = state
+            if read:
+                row['last_read'] = time.time()
+            if error:
+                row['errors'] += 1
+
     def _tail(self, service: str, path: str):
         f = None
+        self._reader_state(service, path, 'starting')
         try:
             f = open(path, "r", errors="replace")
             f.seek(0, 2)
             inode = os.fstat(f.fileno()).st_ino
+            self._reader_state(service, path, 'reading' if self.patterns.get(service) else 'no rules')
             while self.running:
                 line = f.readline()
                 if not line:
@@ -74,16 +91,21 @@ class DetectorEngine:
                             f.close()
                             f = open(path, "r", errors="replace")
                             inode = os.fstat(f.fileno()).st_ino
+                        self._reader_state(service, path, 'reading' if self.patterns.get(service) else 'no rules')
                     except FileNotFoundError:
-                        pass
+                        self._reader_state(service, path, 'missing')
                     continue
+                self._reader_state(service, path, 'reading', read=True)
                 try:
                     self._analyze(service, line)
                 except Exception as e:
+                    self._reader_state(service, path, 'error', error=True)
                     logging.error(f"Error analyzing {service} log line: {e}")
         except Exception as e:
+            self._reader_state(service, path, 'error', error=True)
             logging.error(f"Error tailing {path}: {e}")
         finally:
+            self._reader_state(service, path, 'stopped')
             if f:
                 f.close()
 
@@ -141,10 +163,10 @@ class DetectorEngine:
                 return
 
             self.db.log_attack(ip, service, rule["pattern"], line)
-            self._track_attempt(ip, service, line, rule["weight"])
+            self._track_attempt(ip, service, line, rule["weight"], rule['pattern'])
             break
 
-    def _track_attempt(self, ip: str, service: str, line: str, weight: int):
+    def _track_attempt(self, ip: str, service: str, line: str, weight: int, pattern: str = ''):
         now = time.time()
         window = self.cfg["window"]
         threshold = self.cfg["threshold"]
@@ -157,14 +179,19 @@ class DetectorEngine:
         logging.debug(f"{ip} score {score} ({count} events) on {service}")
 
         if score >= threshold:
+            if self.cfg.get('dry_run') or self.cfg.get('firewall') == 'none':
+                logging.info('Detection only: threshold reached for %s on %s', ip, service)
+                return
+            if not self.fw.block(ip):
+                logging.error('Block failed for %s; quarantine not recorded', ip)
+                return
             is_new = self.db.quarantine(
                 ip,
                 service,
-                f"{score} score ({count} events) on {service}",
+                f"{score} score ({count} events) on {service}" + (f"; rule: {pattern[:240]}" if pattern else ''),
                 ban_duration=self.cfg.get("ban_duration", 0),
                 ban_escalation=self.cfg.get("ban_escalation", 2),
             )
             if is_new:
                 self.new_bans += 1
-                self.fw.block(ip)
-                logging.warning(f"QUARANTINED: {ip} ({service}) - score {score}/{threshold}")
+            logging.warning(f"QUARANTINED: {ip} ({service}) - score {score}/{threshold}")

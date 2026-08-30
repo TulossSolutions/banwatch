@@ -1,0 +1,308 @@
+import json
+import os
+import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+from banwatch_core import database, monitoring, report_delivery, reporter
+from banwatch_core.config import validate_config
+from banwatch_core.detector import DetectorEngine
+from banwatch_core.firewall import Firewall
+from banwatch_core.report_views import render_html
+
+
+class ReportTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for target, key, value in [(database, 'DB_FILE', self.root/'history.db'),
+                                    (database, 'ensure_dirs', lambda: None),
+                                    (reporter, 'REPORT_DIR', self.root)]:
+            p = patch.object(target,key,value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.db = database.BanwatchDB()
+        self.addCleanup(lambda: self.db.conn.close())
+        self.cfg = validate_config({'services': ['ssh'], 'report_frequency': 'daily', 'firewall': 'none'})
+        self.report = reporter.Reporter(self.db,self.cfg)
+        self.end = datetime(2026,8,31,12,tzinfo=timezone.utc).timestamp()
+
+    def event(self, timestamp, ip='203.0.113.1'):
+        self.db.conn.execute('INSERT INTO attacks(ip,service,pattern,line,timestamp,occurred_at) VALUES (?,?,?,?,?,?)',
+                             (ip,'ssh','test','test',datetime.fromtimestamp(timestamp).isoformat(),timestamp))
+        self.db.conn.commit()
+
+    def test_exact_period_boundaries_and_top_ips(self):
+        for stamp in [self.end-172800,self.end-86400-1,self.end-86400,self.end-1,self.end]:
+            self.event(stamp)
+        self.event(self.end-86401,'203.0.113.2')
+        data = self.db.report_data(self.end,86400,self.report.scope)
+        self.assertEqual(data['events'],2)
+        self.assertEqual(data['previous_events'],3)
+        self.assertEqual([r['ip'] for r in data['offenders']],['203.0.113.1'])
+
+    def test_weekly_and_monthly_windows(self):
+        self.event(self.end-5*86400)
+        self.event(self.end-15*86400)
+        self.assertEqual(self.db.report_data(self.end,604800,'week')['events'],1)
+        self.assertEqual(self.db.report_data(self.end,2592000,'month')['events'],2)
+
+    def test_cli_counter_uses_epoch_not_sql_text(self):
+        self.event(self.end-86401)
+        self.event(self.end-1)
+        with patch.object(database.time,'time',return_value=self.end):
+            self.assertEqual(self.db.get_stats()['attacks_24h'],1)
+
+    def test_report_reads_consistent_snapshot_during_external_write(self):
+        self.event(self.end-1)
+        original = self.db.get_stats
+        def write_after_stats():
+            result = original()
+            connection = sqlite3.connect(str(self.root/'history.db'))
+            connection.execute('INSERT INTO attacks (ip,service,occurred_at) VALUES (?,?,?)',('203.0.113.2','ssh',self.end-1))
+            connection.commit()
+            connection.close()
+            return result
+        with patch.object(self.db,'get_stats',side_effect=write_after_stats):
+            self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['events'],1)
+        self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['events'],2)
+
+    def test_migration_resumes_and_preserves_history(self):
+        stamp = '2026-08-30T12:34:56'
+        self.db.conn.execute('INSERT INTO attacks (ip,service,timestamp) VALUES (?,?,?)',('203.0.113.7','ssh',stamp))
+        self.db.conn.commit()
+        self.db._init_reporting()
+        row = self.db.conn.execute('SELECT timestamp,occurred_at FROM attacks').fetchone()
+        self.assertEqual(row,(stamp,datetime.fromisoformat(stamp).timestamp()))
+        self.db._init_reporting()
+        self.assertEqual(self.db.conn.execute('SELECT COUNT(*) FROM attacks').fetchone()[0],1)
+
+    def test_legacy_database_without_epoch_column(self):
+        self.db.conn.close()
+        legacy = self.root/'old.db'
+        connection = sqlite3.connect(str(legacy))
+        connection.execute('CREATE TABLE attacks(id INTEGER PRIMARY KEY,ip TEXT,service TEXT,pattern TEXT,line TEXT,timestamp TEXT)')
+        connection.execute("INSERT INTO attacks VALUES (1,'203.0.113.1','ssh','','','2026-08-30T14:00:00')")
+        connection.commit()
+        connection.close()
+        with patch.object(database,'DB_FILE',legacy):
+            self.db = database.BanwatchDB()
+        self.assertEqual(self.db.conn.execute('SELECT COUNT(*) FROM attacks WHERE occurred_at IS NOT NULL').fetchone()[0],1)
+        self.assertEqual(self.db.conn.execute('PRAGMA integrity_check').fetchone()[0],'ok')
+
+    def test_invalid_legacy_date_is_reported(self):
+        self.db.conn.execute("INSERT INTO attacks (timestamp) VALUES ('bad date')")
+        self.db.conn.commit()
+        with self.assertLogs(level='WARNING'):
+            self.db._init_reporting()
+        self.assertEqual(self.db.report_data(self.end,86400,'test')['invalid_timestamps'],1)
+
+    @unittest.skipUnless(hasattr(time,'tzset'), 'Requires POSIX timezone switching')
+    def test_dst_windows_are_exact_elapsed_seconds(self):
+        old = os.environ.get('TZ')
+        try:
+            os.environ['TZ']='Europe/Paris'
+            time.tzset()
+            for end in [datetime(2026,3,29,12,tzinfo=timezone.utc).timestamp(),datetime(2026,10,25,12,tzinfo=timezone.utc).timestamp()]:
+                self.event(end-86400)
+                self.event(end-86401)
+                self.assertEqual(self.db.report_data(end,86400,'dst')['events'],1)
+        finally:
+            if old is None:
+                os.environ.pop('TZ',None)
+            else:
+                os.environ['TZ']=old
+            time.tzset()
+
+    def test_failed_email_preserves_baseline(self):
+        self.cfg['email']='admin@example.com'
+        self.report=reporter.Reporter(self.db,self.cfg)
+        self.db.save_report_baseline(self.report.scope,1,{'total_entries': 7})
+        with patch.object(reporter,'send_email',side_effect=report_delivery.ReportDeliveryError('failed')):
+            with self.assertRaises(report_delivery.ReportDeliveryError):
+                self.report.save_and_maybe_email()
+        self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['baseline']['total_entries'],7)
+
+    def test_exports_do_not_send_or_change_baseline(self):
+        self.cfg['email']='admin@example.com'
+        with patch.object(reporter,'send_email') as send:
+            for fmt in ['json','csv']:
+                path=self.report.save_and_maybe_email(fmt)
+                self.assertTrue(path.exists())
+            send.assert_not_called()
+        self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['baseline'],{})
+
+    def test_success_uses_only_one_collection_and_persists_its_metrics(self):
+        data=self.report.collect()
+        with patch.object(self.report,'collect',return_value=data) as collect:
+            self.report.save_and_maybe_email()
+            collect.assert_called_once()
+        baseline=self.db.report_data(self.end,86400,self.report.scope)['baseline']
+        self.assertEqual(baseline['generated_at'],data['end'])
+        self.assertEqual(baseline['total_entries'],data['metrics']['total_entries'])
+
+    def test_older_concurrent_report_does_not_rewind_baseline(self):
+        self.db.save_report_baseline('test',200,{'total_entries':2})
+        self.db.save_report_baseline('test',100,{'total_entries':1})
+        self.assertEqual(self.db.report_data(self.end,86400,'test')['baseline']['total_entries'],2)
+
+    def test_scope_changes_when_frequency_or_recipient_changes(self):
+        other=reporter.Reporter(self.db,{**self.cfg,'report_frequency':'weekly'})
+        self.assertNotEqual(other.scope,self.report.scope)
+        other=reporter.Reporter(self.db,{**self.cfg,'email':'other@example.com'})
+        self.assertNotEqual(other.scope,self.report.scope)
+
+    def test_service_configuration_changes_keep_kpi_reference(self):
+        other=reporter.Reporter(self.db,{**self.cfg,'services':['ssh','web']})
+        self.assertEqual(other.scope,self.report.scope)
+
+    def test_bad_webhook_does_not_retry_an_accepted_email(self):
+        cfg={**self.cfg,'email':'admin@example.com','webhooks':[{'url':'invalid-url'}]}
+        r=reporter.Reporter(self.db,cfg)
+        with patch.object(reporter,'send_email') as send,self.assertLogs(level='WARNING'):
+            r.save_and_maybe_email()
+        send.assert_called_once()
+        self.assertTrue(self.db.report_data(self.end,86400,r.scope)['baseline'])
+
+    def test_failed_webhook_only_report_keeps_reference(self):
+        r=reporter.Reporter(self.db,{**self.cfg,'webhooks':[{'url':'invalid-url'}]})
+        with self.assertRaises(report_delivery.ReportDeliveryError),self.assertLogs(level='WARNING'):
+            r.save_and_maybe_email()
+        self.assertFalse(self.db.report_data(self.end,86400,r.scope)['baseline'])
+
+    def test_schedule_survives_recreation(self):
+        due=self.db.next_report_due(self.report.scope,86400,100)
+        self.assertEqual(due,86500)
+        second=database.BanwatchDB()
+        try:
+            self.assertEqual(second.next_report_due(self.report.scope,86400,200),due)
+        finally:
+            second.conn.close()
+
+    def test_scheduler_retries_twice_then_waits_normal_interval(self):
+        due=self.db.next_report_due(self.report.scope,86400,100)
+        with patch.object(self.report,'save_and_maybe_email',side_effect=RuntimeError('no transport')):
+            for delay in [900,1800,86400]:
+                with self.assertLogs(level='ERROR'):
+                    self.assertFalse(self.report.run_scheduled(due))
+                next_due=self.db.next_report_due(self.report.scope,86400,due)
+                self.assertEqual(next_due,due+delay)
+                due=next_due
+
+    def test_scheduler_success_and_not_due(self):
+        self.db.next_report_due(self.report.scope,86400,100)
+        with patch.object(self.report,'save_and_maybe_email') as save:
+            self.assertFalse(self.report.run_scheduled(200))
+            save.assert_not_called()
+            self.assertTrue(self.report.run_scheduled(86500))
+        self.assertEqual(self.db.next_report_due(self.report.scope,86400,86500),172900)
+
+    def test_html_escapes_values_and_omits_redundant_sections(self):
+        data=self.report.collect()
+        data['hostname']='<script>alert(1)</script>'
+        rendered=render_html(data)
+        self.assertNotIn('<script>',rendered)
+        self.assertIn('&lt;script&gt;',rendered)
+        self.assertNotIn('Active threat containment',rendered)
+        self.assertNotIn(' ACTIVE',rendered)
+        self.assertIn('No events recorded in this period',rendered)
+        self.assertIn('No baseline',rendered)
+
+    def test_ban_lifecycle_records_real_actions(self):
+        self.db.quarantine('203.0.113.1','ssh','test')
+        self.db.release('203.0.113.1')
+        self.db.release('203.0.113.1')
+        self.db.quarantine('203.0.113.1','ssh','again')
+        self.db.mark_expired('203.0.113.1')
+        self.assertEqual([r[0] for r in self.db.conn.execute('SELECT action FROM ban_events')],['ban','release','reban','expire'])
+
+    def test_firewall_failure_does_not_create_quarantine(self):
+        cfg={**self.cfg,'firewall':'iptables','threshold':1}
+        fw=Mock()
+        fw.block.return_value=False
+        engine=DetectorEngine(cfg,self.db,fw)
+        with self.assertLogs(level='ERROR'):
+            engine._track_attempt('203.0.113.9','ssh','line',5)
+        self.assertFalse(self.db.is_quarantined('203.0.113.9'))
+
+    def test_repeat_ban_reapplies_firewall(self):
+        self.db.quarantine('203.0.113.9','ssh','old')
+        self.db.release('203.0.113.9')
+        fw=Mock()
+        fw.block.return_value=True
+        engine=DetectorEngine({**self.cfg,'firewall':'iptables','threshold':1},self.db,fw)
+        engine._track_attempt('203.0.113.9','ssh','line',5)
+        fw.block.assert_called_once_with('203.0.113.9')
+        self.assertTrue(self.db.is_quarantined('203.0.113.9'))
+        self.assertNotEqual(self.db.get_ban_list(1)[0]['reason'],'old')
+
+    def test_dry_run_never_creates_active_ban(self):
+        fw=Mock()
+        engine=DetectorEngine({**self.cfg,'dry_run':True,'threshold':1},self.db,fw)
+        engine._track_attempt('203.0.113.9','ssh','line',5)
+        fw.block.assert_not_called()
+        self.assertFalse(self.db.is_quarantined('203.0.113.9'))
+
+
+class TransportAndHealthTests(unittest.TestCase):
+    def test_multipart_mail_contains_plain_and_html(self):
+        cfg=validate_config({'email':'admin@example.com','email_from':'Operator <ops@example.com>'})
+        with patch.object(report_delivery.shutil,'which',return_value='/usr/sbin/sendmail'), patch.object(report_delivery.subprocess,'run',return_value=Mock(returncode=0)) as run:
+            report_delivery.send_email(cfg,'BanWatch [server] daily report','plain text','<p>HTML</p>')
+        message=BytesParser(policy=policy.default).parsebytes(run.call_args.kwargs['input'])
+        self.assertEqual(message.get_content_type(),'multipart/alternative')
+        self.assertIn('plain text',message.get_body(preferencelist=('plain',)).get_content())
+        self.assertIn('HTML',message.get_body(preferencelist=('html',)).get_content())
+        self.assertEqual(str(message['From']),'Operator <ops@example.com>')
+
+    def test_email_header_injection_rejected(self):
+        for field in ['email','email_from','report_hostname']:
+            with self.assertRaises(ValueError):
+                validate_config({field:'a@example.com\r\nBcc: other@example.com'})
+
+    def test_iptables_command_does_not_duplicate_executable(self):
+        fw=Firewall('iptables')
+        with patch.object(fw,'_run',side_effect=[1,0]) as run:
+            self.assertTrue(fw.block('203.0.113.1'))
+        self.assertEqual(run.call_args.args[0],['iptables','-A','INPUT','-s','203.0.113.1','-j','DROP'])
+
+    def test_audit_is_read_only_and_does_not_count_partial_rules(self):
+        output='-A INPUT -s 203.0.113.1/32 -j DROP\n-A INPUT -s 203.0.113.2/32 -p tcp -j DROP\n'
+        with patch('banwatch_core.firewall.subprocess.run',return_value=Mock(stdout=output)) as run:
+            audit=Firewall('iptables').audit(['203.0.113.1','203.0.113.2'])
+        self.assertEqual(audit['missing'],1)
+        self.assertEqual(run.call_args.args[0],['iptables-save','-t','filter'])
+
+    def test_firewall_check_failure_is_unknown(self):
+        with patch('banwatch_core.firewall.subprocess.run',side_effect=OSError('denied')):
+            self.assertEqual(Firewall('iptables').audit(['203.0.113.1'])['status'],'unverified')
+
+    def test_live_stale_and_incomplete_heartbeat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            health_path=Path(folder)/'health.json'
+            pid_path=Path(folder)/'pid'
+            cfg={'services':['ssh'],'log_paths':{'ssh':['auth.log','missing.log']}}
+            pid_path.write_text(str(os.getpid()))
+            state={'pid':os.getpid(),'checked_at':time.time(),'readers':{'ssh:auth.log':{'state':'reading','last_read':1}}}
+            health_path.write_text(json.dumps(state))
+            with patch.object(monitoring,'HEALTH_FILE',health_path),patch.object(monitoring,'PID_FILE',pid_path),patch.object(monitoring.os,'kill'):
+                result=monitoring.read_health(cfg)
+                self.assertTrue(result['verified'])
+                self.assertEqual(result['monitored'],0)
+                self.assertEqual(result['services']['ssh']['healthy'],1)
+                state['checked_at']-=100
+                health_path.write_text(json.dumps(state))
+                self.assertFalse(monitoring.read_health(cfg)['verified'])
+
+
+if __name__ == '__main__':
+    unittest.main()
