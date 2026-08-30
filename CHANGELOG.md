@@ -4,6 +4,26 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.5.0] - 2026-08-30
+
+### Added
+- Shell installer for local checkouts or GitHub downloads, with configurable install paths and optional setup/systemd integration
+- Report KPI changes compared with the previous saved report, persisted in SQLite report snapshots
+
+### Changed
+- Report generation date appears below Daily Report in the header
+- Report footer uses the package version instead of a hardcoded version
+- README introduces BanWatch as a lightweight Fail2ban alternative with UFW-like simplicity, with a quickstart, feature list, supported OS guidance, and installer documentation
+
+### Fixed
+- systemd startup waits for the double-forked daemon PID to become available
+- Daemon process retains the flock lock for its lifetime
+
+### Upgrade
+- Run the installer from this release's extracted source archive, then restart the existing BanWatch service
+- The installer moves runtime code to /usr/local/lib/banwatch; existing configuration, firewall rules, and history are preserved
+- The report_snapshots table is created automatically on first database access; the first report has no comparison baseline
+
 ## [0.4.0] - 2026-08-21
 
 ### Added
