@@ -47,11 +47,22 @@ def service_rows(data):
             detail = 'Last read: ' + when(health['last_read'])
             if health['errors']:
                 detail += ' - %s errors' % health['errors']
-        rows.append('<tr><td><strong>%s</strong></td><td class="number">%s</td>'
-                    '<td class="number">%s</td><td>%s<div class="muted">%s</div></td></tr>' % (
-                        esc(name.upper()), format(data['events_by_service'].get(name, 0), ','),
-                        format(counts.get(name, (0,0))[1], ','), esc(state), esc(detail)))
-    return ''.join(rows) or '<tr><td colspan="4">No services configured.</td></tr>'
+        total, active = counts.get(name, (0, 0))
+        pct = round(active / max(total, 1) * 100)
+        rows.append('''<tr>
+<td class="service-cell" style="padding:14px 0;border-bottom:1px solid #e5e7eb;font-size:13px;line-height:18px;overflow-wrap:anywhere;vertical-align:top;">
+<strong>%s</strong><div style="font-size:10px;color:#9ca3af;margin-top:5px;">%s events in period</div></td>
+<td class="service-cell" style="padding:14px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#4b5563;text-align:right;vertical-align:top;overflow-wrap:anywhere;">%s</td>
+<td class="service-cell" style="padding:14px 12px;border-bottom:1px solid #e5e7eb;text-align:right;vertical-align:top;overflow-wrap:anywhere;">
+<span style="display:inline-block;max-width:100%%;box-sizing:border-box;padding:4px 8px;background:#fef2f2;color:#dc2626;border-radius:999px;font-size:11px;font-weight:700;">%s</span></td>
+<td class="service-cell" style="padding:14px 0;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;">
+<div style="background:#e5e7eb;border-radius:999px;height:6px;line-height:6px;font-size:0;"><div style="width:%s%%;height:6px;background:#dc2626;border-radius:999px;line-height:6px;font-size:0;">&nbsp;</div></div>
+<div style="margin-top:5px;font-size:10px;line-height:14px;color:#9ca3af;">%s%% still quarantined</div>
+<div style="margin-top:5px;font-size:11px;line-height:17px;color:#4b5563;">Log readers: %s</div>
+<div style="font-size:10px;line-height:14px;color:#9ca3af;">%s</div></td></tr>''' % (
+            esc(name.upper()), format(data['events_by_service'].get(name, 0), ','),
+            format(total, ','), format(active, ','), pct, pct, esc(state), esc(detail)))
+    return ''.join(rows) or '<tr><td colspan="4" style="padding:14px 0;font-size:13px;">No services configured.</td></tr>'
 
 
 def render_text(data):
@@ -94,16 +105,19 @@ def render_html(data):
     cards = [
         (format(stats['total_entries'], ','), 'IPs ever banned', delta(stats['total_entries'],baseline.get('total_entries'),neutral=True)),
         (format(stats['active_quarantined'], ','), 'Active bans', delta(stats['active_quarantined'],baseline.get('active_quarantined'),neutral=True)),
-        (format(data['events'], ','), 'Events in period', delta(data['events'],data['previous_events']) + ' <span class="muted">vs previous period</span>'),
+        (format(data['events'], ','), 'Events in period', delta(data['events'],data['previous_events']) + ' <span style="color:#6b7280;font-weight:400;">vs previous period</span>'),
         (('%s / %s' % (health['monitored'],len(data['configured_services']))) if health['verified'] else 'Unknown',
          'Monitored services', delta(data['metrics']['monitored'],baseline.get('monitored'),positive_good=True)),
     ]
-    kpis = ''.join('<td class="kpi" width="25%%" valign="top" style="padding:6px;vertical-align:top;">'
-                   '<div style="border-top:2px solid #111827;padding:12px 0;">'
-                   '<div style="font-size:%spx;line-height:32px;font-weight:700;overflow-wrap:anywhere;">%s</div>'
-                   '<div style="font-size:12px;line-height:18px;color:#4b5563;">%s</div>'
-                   '<div style="font-size:11px;line-height:17px;margin-top:5px;">%s</div></div></td>' % (24 if len(value)<10 else 14,value,label,change)
-                   for value,label,change in cards)
+    kpis = ''.join('<td class="kpi" width="25%%" valign="top" style="padding:0 5px;vertical-align:top;">'
+                   '<div class="kpi-card" style="border:1px solid %s;background:%s;padding:18px;min-height:82px;">'
+                   '<div style="font-size:%spx;line-height:30px;font-weight:800;color:%s;overflow-wrap:anywhere;">%s</div>'
+                   '<div style="margin-top:6px;font-size:10px;line-height:14px;font-weight:700;text-transform:uppercase;color:%s;">%s</div>'
+                   '<div style="font-size:10px;line-height:14px;margin-top:7px;font-weight:700;">%s</div></div></td>' % (
+                       '#fecaca' if i == 1 else '#e5e7eb', '#fff7f7' if i == 1 else '#fafafa',
+                       25 if len(value) < 10 else 14, '#dc2626' if i == 1 else '#111827', value,
+                       '#b91c1c' if i == 1 else '#6b7280', label, change)
+                   for i,(value,label,change) in enumerate(cards))
     reference = ('Other KPI changes vs %s (%s).' % (when(baseline['generated_at'],True),data['baseline_kind'])) if baseline else 'First report: no earlier comparison for other KPIs.'
     warnings = []
     if not health['verified']:
@@ -118,67 +132,106 @@ def render_html(data):
         warnings.append('%s historical events have invalid dates and are excluded from period counts.' % data['invalid_timestamps'])
     alert = ''.join('<p style="margin:12px 0;padding:12px;border-left:3px solid #b45309;background:#fffbeb;color:#78350f;font-size:13px;">%s</p>' % esc(w) for w in warnings)
     offenders = []
-    for row in data['offenders']:
+    max_events = max((row['events'] for row in data['offenders']), default=1)
+    for rank, row in enumerate(data['offenders'], start=1):
         state = row.get('status') or 'observed'
         until = row.get('banned_until')
         expiry = ('Until ' + when(until)) if until and state == 'quarantined' else ('No expiry' if state == 'quarantined' else '')
-        offenders.append('<tr><td><strong class="ip">%s</strong><div class="muted">%s</div></td>'
-                         '<td class="number"><strong>%s</strong><div class="muted">%s</div></td>'
-                         '<td>%s<div class="muted">%s</div><div class="muted reason">%s</div></td></tr>' % (
-                             esc(row['ip']),esc(row['service'].upper()),format(row['events'],','),esc(when(row['last_seen'])),
-                             esc(state.title()),esc(expiry),esc(row.get('reason') or 'No ban recorded')))
-    top_rows = ''.join(offenders) or '<tr><td colspan="3">No events recorded in this period.</td></tr>'
+        rank_bg = ['#dc2626', '#374151', '#6b7280'][rank-1] if rank <= 3 else '#e5e7eb'
+        offenders.append('''<tr class="offender-row">
+<td class="rank-cell" style="padding:15px 0;border-bottom:1px solid #e5e7eb;vertical-align:top;">
+<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:50%%;background:%s;color:%s;font-size:11px;font-weight:700;">%s</span></td>
+<td class="ip-cell" style="padding:15px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;">
+<strong style="font-family:'Courier New',monospace;font-size:13px;line-height:18px;">%s</strong>
+<div style="font-size:11px;line-height:17px;color:#6b7280;margin-top:5px;">%s</div>
+<div style="font-size:11px;line-height:17px;color:#6b7280;">%s</div>
+<div style="font-size:11px;line-height:17px;color:#6b7280;margin-top:4px;">%s</div></td>
+<td class="offender-meta" style="padding:15px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;font-size:11px;line-height:18px;font-weight:700;color:#6b7280;">
+<span class="mobile-label" style="display:none;font-size:10px;font-weight:400;">Service</span>%s</td>
+<td class="offender-meta" style="padding:15px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;">
+<strong style="font-size:13px;line-height:18px;color:#dc2626;">%s</strong> <span style="font-size:10px;color:#9ca3af;">events</span>
+<div style="background:#f3f4f6;height:4px;margin-top:7px;border-radius:999px;font-size:0;line-height:4px;"><div style="width:%s%%;height:4px;background:#dc2626;border-radius:999px;font-size:0;line-height:4px;">&nbsp;</div></div></td>
+<td class="offender-meta" style="padding:15px 0 15px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;font-size:11px;line-height:18px;color:#6b7280;">
+<span class="mobile-label" style="display:none;font-size:10px;">Last seen</span>%s</td></tr>''' % (
+            rank_bg, '#ffffff' if rank <= 3 else '#6b7280', rank, esc(row['ip']), esc(state.title()),
+            esc(expiry), esc(row.get('reason') or 'No ban recorded'), esc(row['service'].upper()),
+            format(row['events'], ','), round(row['events'] / max(max_events, 1) * 100), esc(when(row['last_seen']))))
+    top_rows = ''.join(offenders) or '<tr><td colspan="5" style="padding:15px 0;font-size:13px;">No events recorded in this period.</td></tr>'
     actions = ' &nbsp; '.join('<strong>%s</strong> %s' % (format(data['actions'].get(key,0),','), label)
                             for key,label in [('ban','new bans'),('reban','repeat bans'),('release','released'),('expire','expired')])
     return '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BanWatch report</title>
 <style>
-body,table,td,th {font-family:Arial,Helvetica,sans-serif;letter-spacing:0;}
-body {margin:0;padding:0;background:#f3f4f6;color:#111827;}
-table {border-collapse:collapse;} .shell {width:100%%;max-width:720px;table-layout:fixed;}
-.content {padding:22px 28px;} .muted {color:#6b7280;font-size:11px;line-height:17px;font-weight:400;}
-.data {width:100%%;table-layout:fixed;} .data td,.data th {padding:11px 6px;border-bottom:1px solid #e5e7eb;text-align:left;font-size:12px;line-height:18px;overflow-wrap:anywhere;word-wrap:break-word;}
-.data th {font-size:11px;color:#4b5563;font-weight:700;} .data .number {text-align:right;} .ip {font-family:'Courier New',monospace;font-size:12px;}
-h2 {font-size:16px;line-height:22px;margin:22px 0 6px;} p {line-height:20px;} .reason {margin-top:4px;}
 @media only screen and (max-width:520px) {
- .content {padding:16px 12px!important;} .kpi {display:inline-block!important;width:50%%!important;box-sizing:border-box;}
- .data td,.data th {padding:9px 3px!important;} .brand {font-size:19px!important;} .report-title {font-size:12px!important;}
+ .outer {padding:12px 6px!important;} .content {padding:18px 12px!important;}
+ .kpi {display:inline-block!important;width:50%%!important;box-sizing:border-box;padding:4px!important;}
+ .kpi-card {padding:12px!important;min-height:100px!important;} .service-cell {padding:12px 3px!important;}
+ .service-cell strong {font-size:11px!important;}
+ .offenders thead {display:none!important;} .offender-row {display:block!important;border-bottom:1px solid #e5e7eb;font-size:0;}
+ .rank-cell {display:block!important;float:left;padding:15px 0!important;border:0!important;}
+ .ip-cell {display:block!important;padding:15px 0 8px 36px!important;border:0!important;}
+ .offender-meta {display:inline-block!important;width:33.333%%!important;box-sizing:border-box;padding:8px 4px 15px!important;border:0!important;}
+ .mobile-label {display:block!important;} .section-caption {font-size:9px!important;}
 }
 </style></head>
-<body><table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f4f6;"><tr><td align="center">
-<!--[if mso]><table role="presentation" width="720"><tr><td><![endif]-->
-<table role="presentation" class="shell" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;max-width:720px;background:#ffffff;table-layout:fixed;">
-<tr><td class="content" style="padding:22px 28px;background:#111111;color:#ffffff;">
-<table role="presentation" width="100%%" style="width:100%%;table-layout:fixed;"><tr>
-<td style="width:42%%;vertical-align:top;"><div class="brand" style="font-size:23px;line-height:28px;font-weight:700;">Ban<span style="color:#f87171;">Watch</span></div>
-<div style="font-size:12px;line-height:18px;color:#d1d5db;margin-top:7px;overflow-wrap:anywhere;word-break:break-all;">%(host)s</div></td>
-<td style="text-align:right;vertical-align:top;"><div class="report-title" style="font-size:14px;line-height:20px;font-weight:700;">%(frequency)s REPORT</div>
-<div style="font-size:11px;line-height:17px;color:#d1d5db;margin-top:5px;">Generated %(generated)s</div></td></tr></table>
+<body style="margin:0;padding:0;background:#f3f4f6;color:#111827;font-family:Arial,Helvetica,sans-serif;letter-spacing:0;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f4f6;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr><td class="outer" align="center" style="padding:32px 12px;">
+<!--[if mso]><table role="presentation" width="900"><tr><td><![endif]-->
+<table role="presentation" class="shell" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;max-width:900px;background:#ffffff;border:1px solid #e5e7eb;border-collapse:collapse;table-layout:fixed;font-family:Arial,Helvetica,sans-serif;">
+<tr><td class="content" style="padding:28px 32px;background:#111111;color:#ffffff;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr>
+<td style="width:42%%;vertical-align:top;"><div style="font-size:20px;line-height:24px;font-weight:800;">Ban<span style="color:#ef4444;">Watch</span></div>
+<div style="font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;margin-top:4px;">Security Intelligence</div>
+<div style="font-size:11px;line-height:17px;color:#d1d5db;margin-top:7px;overflow-wrap:anywhere;word-break:break-all;">%(host)s</div></td>
+<td style="text-align:right;vertical-align:top;"><div style="display:inline-block;border:1px solid #374151;border-radius:999px;padding:6px 10px;font-size:10px;line-height:14px;font-weight:700;">%(frequency)s REPORT</div>
+<div style="font-size:10px;line-height:15px;color:#9ca3af;margin-top:7px;overflow-wrap:anywhere;">Generated %(generated)s</div></td></tr></table>
 </td></tr>
-<tr><td class="content" style="padding:22px 28px;">
-<p style="margin:0 0 5px;font-size:12px;color:#4b5563;">%(period)s</p>
-<p style="margin:0 0 16px;font-size:11px;color:#6b7280;">Previous period: %(previous_period)s</p>
-<table role="presentation" width="100%%" style="width:100%%;table-layout:fixed;"><tr>%(kpis)s</tr></table>
-<p class="muted" style="font-size:11px;line-height:17px;color:#6b7280;margin:0 0 16px;">%(reference)s</p>
-<p style="font-size:12px;margin:0;"><strong>%(mode)s</strong> &nbsp; Firewall: %(firewall)s</p>
-<p class="muted" style="font-size:11px;line-height:17px;color:#6b7280;margin:4px 0;">Rule presence checked; packet-path ordering is not audited.</p>
+<tr><td class="content" style="padding:34px 32px 22px;">
+<div style="font-size:10px;line-height:14px;font-weight:700;text-transform:uppercase;color:#dc2626;">Security report</div>
+<h1 style="font-size:28px;line-height:34px;font-weight:800;margin:8px 0 14px;">Threat activity overview</h1>
+<p style="margin:0 0 5px;font-size:12px;line-height:20px;color:#4b5563;">%(period)s</p>
+<p style="margin:0;font-size:11px;line-height:17px;color:#6b7280;">Previous period: %(previous_period)s</p>
+</td></tr>
+<tr><td class="content" style="padding:0 27px 30px;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr>%(kpis)s</tr></table>
+<p style="font-size:11px;line-height:17px;color:#6b7280;margin:12px 5px 0;">%(reference)s</p>
+</td></tr>
+<tr><td class="content" style="padding:0 32px 30px;">
+<p style="font-size:12px;line-height:20px;margin:0;"><strong>%(mode)s</strong> &nbsp; Firewall: %(firewall)s</p>
+<p style="font-size:11px;line-height:17px;color:#6b7280;margin:4px 0;">Rule presence checked; packet-path ordering is not audited.</p>
 %(alerts)s
-<h2 style="font-size:16px;line-height:22px;margin:24px 0 6px;">Service breakdown</h2>
-<table class="data" width="100%%" style="width:100%%;table-layout:fixed;"><thead><tr>
-<th scope="col" width="22%%">Service</th><th scope="col" width="15%%" class="number">Events</th><th scope="col" width="15%%" class="number">Active</th><th scope="col" width="48%%">Log readers</th>
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;border-bottom:2px solid #111827;margin-top:24px;font-family:Arial,Helvetica,sans-serif;"><tr>
+<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Service breakdown</h2></td>
+<td class="section-caption" style="padding:0 0 12px;text-align:right;font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;">Quarantine status</td></tr></table>
+<table width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><thead><tr>
+<th class="service-cell" scope="col" width="26%%" style="padding:12px 0;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Service</th>
+<th class="service-cell" scope="col" width="16%%" style="padding:12px;text-align:right;font-size:10px;color:#9ca3af;text-transform:uppercase;">Total</th>
+<th class="service-cell" scope="col" width="16%%" style="padding:12px;text-align:right;font-size:10px;color:#9ca3af;text-transform:uppercase;">Active</th>
+<th class="service-cell" scope="col" width="42%%" style="padding:12px 0;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Status</th>
 </tr></thead><tbody>%(services)s</tbody></table>
 <p style="font-size:12px;line-height:22px;margin:14px 0 3px;">%(actions)s</p>
-<p class="muted" style="font-size:11px;line-height:17px;color:#6b7280;margin:0;">Ban actions tracked from %(tracking)s within this period.</p>
-<h2 style="font-size:16px;line-height:22px;margin:24px 0 6px;">Top IPs in this period</h2>
-<table class="data" width="100%%" style="width:100%%;table-layout:fixed;"><thead><tr>
-<th scope="col" width="39%%">IP / service</th><th scope="col" width="21%%" class="number">Events / last seen</th><th scope="col" width="40%%">Ban status / reason</th>
+<p style="font-size:11px;line-height:17px;color:#6b7280;margin:0;">Ban actions tracked from %(tracking)s within this period.</p>
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;border-bottom:2px solid #111827;margin-top:24px;font-family:Arial,Helvetica,sans-serif;"><tr>
+<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Top offenders</h2></td>
+<td class="section-caption" style="padding:0 0 12px;text-align:right;font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;">Events in this period</td></tr></table>
+<table class="offenders" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><thead><tr>
+<th scope="col" width="6%%" style="padding:12px 0;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">#</th>
+<th scope="col" width="28%%" style="padding:12px 8px;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">IP address</th>
+<th scope="col" width="14%%" style="padding:12px 8px;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Service</th>
+<th scope="col" width="28%%" style="padding:12px 8px;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Events</th>
+<th scope="col" width="24%%" style="padding:12px 0 12px 8px;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Last seen</th>
 </tr></thead><tbody>%(offenders)s</tbody></table>
 </td></tr>
-<tr><td class="content" style="padding:18px 28px;background:#111111;color:#d1d5db;font-size:11px;line-height:18px;">
-BanWatch v%(version)s &nbsp; | &nbsp; %(host)s<br>Confidential security report
+<tr><td class="content" style="padding:22px 32px;background:#111111;color:#d1d5db;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr>
+<td style="width:60%%;vertical-align:top;"><div style="font-size:13px;line-height:18px;font-weight:800;color:#ffffff;">Ban<span style="color:#ef4444;">Watch</span></div>
+<div style="font-size:10px;line-height:15px;color:#6b7280;margin-top:4px;">Automated security monitoring &amp; IP quarantine</div></td>
+<td style="text-align:right;vertical-align:top;font-size:10px;line-height:15px;color:#6b7280;">BanWatch v%(version)s<div style="margin-top:3px;color:#4b5563;">Report generated automatically</div></td>
+</tr></table>
 </td></tr></table>
 <!--[if mso]></td></tr></table><![endif]-->
+<p style="max-width:900px;margin:0;padding:18px 20px;font-size:10px;line-height:15px;color:#9ca3af;">This report was generated by BanWatch. Keep it confidential and intended for authorized recipients only.</p>
 </td></tr></table></body></html>''' % {
         'host': esc(data['hostname']), 'frequency': esc(data['frequency'].upper()),
         'generated': esc(when(data['end'],True)), 'period': esc(when(data['start'],True) + ' to ' + when(data['end'],True)),

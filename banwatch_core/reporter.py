@@ -35,7 +35,7 @@ class Reporter:
         data['firewall'] = Firewall(self.cfg.get('firewall', 'none'), self.cfg.get('dry_run', False)).audit(data['active_ips'])
         data['mode'] = 'Detection only' if self.cfg.get('dry_run') or self.cfg.get('firewall') == 'none' else 'Blocking enabled'
         data['configured_services'] = self.cfg['services']
-        data['baseline_kind'] = 'mail accepted' if self.cfg.get('email') else 'saved report'
+        data['baseline_kind'] = 'HTML report, mail accepted' if self.cfg.get('email') else 'saved HTML report'
         data['metrics'] = {
             'total_entries': data['stats']['total_entries'],
             'active_quarantined': data['stats']['active_quarantined'],
@@ -47,10 +47,20 @@ class Reporter:
         return render_html(self.collect())
 
     def generate_json(self) -> str:
-        return json.dumps(self.collect(), indent=2)
+        return self._json(self.collect())
 
     def generate_csv(self) -> str:
         return self._csv(self.collect())
+
+    @staticmethod
+    def _json(data):
+        return json.dumps({
+            'generated_at': datetime.fromtimestamp(data['end']).isoformat(),
+            'stats': data['stats'],
+            'breakdown': [{'service': service, 'total': total, 'active': active}
+                          for service, total, active in data['breakdown']],
+            'bans': data['bans'],
+        }, indent=2)
 
     @staticmethod
     def _csv(data):
@@ -59,9 +69,7 @@ class Reporter:
         fields = ['ip', 'service', 'reason', 'attempts', 'first_seen', 'last_seen', 'status', 'banned_until']
         writer.writerow(fields)
         for entry in data['bans']:
-            # Formula protection when logs/reasons are exported to spreadsheet tools.
-            writer.writerow("'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@')) else value
-                            for value in (entry.get(f) for f in fields))
+            writer.writerow(entry.get(field) for field in fields)
         return buf.getvalue()
 
     def save_and_maybe_email(self, format: str = 'html'):
@@ -71,7 +79,7 @@ class Reporter:
         if format == 'html':
             report = render_html(data)
         elif format == 'json':
-            report = json.dumps(data, indent=2)
+            report = self._json(data)
         else:
             report = self._csv(data)
         stamp = datetime.fromtimestamp(data['end']).strftime('%Y%m%d_%H%M%S_%f')
@@ -80,18 +88,18 @@ class Reporter:
             output.write(report)
         path.chmod(0o640)
         logging.info('Report saved: %s', path)
-        # Data exports never send notifications or change the HTML/email baseline.
-        if format != 'html':
-            return path
         text = render_text(data)
         if self.cfg.get('email'):
+            html_report = report if format == 'html' else render_html(data)
             subject = 'BanWatch [%s] %s report - %s' % (
                 data['hostname'], self.frequency, datetime.fromtimestamp(data['end']).astimezone().strftime('%Y-%m-%d %Z'))
-            send_email(self.cfg, subject, text, report)
+            send_email(self.cfg, subject, text, html_report)
         hooks_ok = send_webhooks(self.cfg.get('webhooks', []), text)
         if not hooks_ok and not self.cfg.get('email'):
             raise ReportDeliveryError('Webhook report was not accepted')
-        self.db.save_report_baseline(self.scope, data['end'], data['metrics'])
+        # Restored export notifications do not change the existing baseline policy.
+        if format == 'html':
+            self.db.save_report_baseline(self.scope, data['end'], data['metrics'])
         return path
 
     def run_scheduled(self, now=None):

@@ -4,6 +4,23 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.6.1] - 2026-08-31
+
+### Fixed
+- Restore the original desktop report design, KPI cards, historical service totals and quarantine bars, offender ranks and separate columns
+- Keep base email styles inline; the stylesheet contains only mobile overrides
+- Restore the original JSON export schema and unchanged CSV field values, retaining the added banned_until column
+- Restore configured email/webhook notifications for JSON and CSV commands without advancing the last successful HTML-format KPI reference
+
+### Documentation
+- Clarify bare recipient email addresses, export notifications and the HTML-only comparison reference
+- Document the retained firewall-first quarantine, repeat-ban, release and expiration behavior, including dry-run/none modes
+
+### Unchanged
+- Retain period-based metrics, live reader health, read-only firewall checks, multipart delivery and persistent scheduling from 0.6.0
+- Keep the redundant containment banner and repeated ACTIVE row labels removed
+- No new database migration, configuration changes or bulk firewall reconciliation
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

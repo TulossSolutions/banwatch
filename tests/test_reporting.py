@@ -1,5 +1,8 @@
+import csv
+import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import tempfile
@@ -132,14 +135,57 @@ class ReportTests(unittest.TestCase):
                 self.report.save_and_maybe_email()
         self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['baseline']['total_entries'],7)
 
-    def test_exports_do_not_send_or_change_baseline(self):
+    def test_exports_restore_notifications_without_changing_baseline(self):
         self.cfg['email']='admin@example.com'
-        with patch.object(reporter,'send_email') as send:
+        self.cfg['webhooks']=[{'url':'https://example.com/hook','type':'generic'}]
+        with patch.object(reporter,'send_email') as send, patch.object(reporter,'send_webhooks',return_value=True) as hooks:
             for fmt in ['json','csv']:
                 path=self.report.save_and_maybe_email(fmt)
                 self.assertTrue(path.exists())
-            send.assert_not_called()
+                self.assertIn('<html',send.call_args.args[3])
+            self.assertEqual(send.call_count,2)
+            self.assertEqual(hooks.call_count,2)
         self.assertEqual(self.db.report_data(self.end,86400,self.report.scope)['baseline'],{})
+
+    def test_json_export_preserves_legacy_schema(self):
+        self.db.quarantine('203.0.113.1','ssh','test')
+        data=json.loads(self.report.generate_json())
+        self.assertEqual(set(data),{'generated_at','stats','breakdown','bans'})
+        datetime.fromisoformat(data['generated_at'])
+        self.assertEqual(data['breakdown'],[{'service':'ssh','total':1,'active':1}])
+        self.assertEqual(data['bans'][0]['ip'],'203.0.113.1')
+        self.assertEqual(set(data['stats']),{'total_entries','active_quarantined','by_service','attacks_24h'})
+
+    def test_only_html_advances_an_existing_comparison_reference(self):
+        self.cfg['email']='admin@example.com'
+        report=reporter.Reporter(self.db,self.cfg)
+        self.db.save_report_baseline(report.scope,1,{'total_entries':7,'active_quarantined':4,'monitored':1})
+        with patch.object(reporter,'send_email') as send:
+            for fmt in ['json','csv']:
+                report.save_and_maybe_email(fmt)
+                baseline=self.db.report_data(self.end,86400,report.scope)['baseline']
+                self.assertEqual(baseline['generated_at'],1)
+                self.assertEqual(baseline['total_entries'],7)
+            report.save_and_maybe_email('html')
+        baseline=self.db.report_data(self.end,86400,report.scope)['baseline']
+        self.assertGreater(baseline['generated_at'],1)
+        self.assertEqual(baseline['total_entries'],0)
+        self.assertEqual(send.call_count,3)
+
+    def test_csv_preserves_raw_fields_and_keeps_banned_until(self):
+        reason='=raw, "quoted"\nlog text'
+        self.db.quarantine('203.0.113.1','ssh',reason,ban_duration=3600)
+        rows=list(csv.reader(io.StringIO(self.report.generate_csv())))
+        self.assertEqual(rows[0],['ip','service','reason','attempts','first_seen','last_seen','status','banned_until'])
+        self.assertEqual(rows[1][2],reason)
+        self.assertTrue(rows[1][7])
+
+    def test_saved_json_uses_legacy_schema_and_html_notification(self):
+        self.cfg['email']='admin@example.com'
+        with patch.object(reporter,'send_email') as send:
+            path=self.report.save_and_maybe_email('json')
+        self.assertEqual(set(json.loads(path.read_text(encoding='utf-8'))),{'generated_at','stats','breakdown','bans'})
+        self.assertIn('<html',send.call_args.args[3])
 
     def test_success_uses_only_one_collection_and_persists_its_metrics(self):
         data=self.report.collect()
@@ -225,6 +271,40 @@ class ReportTests(unittest.TestCase):
         self.db.mark_expired('203.0.113.1')
         self.assertEqual([r[0] for r in self.db.conn.execute('SELECT action FROM ban_events')],['ban','release','reban','expire'])
 
+    def test_original_report_design_and_data_are_preserved(self):
+        data=self.report.collect()
+        data['breakdown']=[('ssh',8,2)]
+        data['events_by_service']={'ssh':3}
+        data['health']['services']={'ssh':{'healthy':1,'total':1,'last_read':self.end,'errors':0}}
+        data['offenders']=[{'ip':'203.0.113.9','service':'ssh','events':3,'last_seen':self.end,
+                            'status':'quarantined','reason':'<untrusted>','banned_until':self.end+3600}]
+        rendered=render_html(data)
+        for text in ['Security Intelligence','Threat activity overview','max-width:900px',
+                     'background:#fff7f7','>Total</th>','25% still quarantined',
+                     '3 events in period','Log readers: 1/1 reading', 'width:26px;height:26px',
+                     '>IP address</th>','>Last seen</th>','&lt;untrusted&gt;','Until ',
+                     'Automated security monitoring &amp; IP quarantine']:
+            self.assertIn(text,rendered)
+        self.assertNotIn(' ACTIVE',rendered)
+
+    def test_stylesheet_contains_only_mobile_rules(self):
+        rendered=self.report.generate_html()
+        styles=re.findall(r'<style>(.*?)</style>',rendered,re.S)
+        self.assertEqual(len(styles),1)
+        css=styles[0].strip()
+        self.assertTrue(css.startswith('@media only screen and (max-width:520px) {'))
+        depth=0
+        for index,char in enumerate(css[css.index('{'):],start=css.index('{')):
+            depth += (char == '{') - (char == '}')
+            if depth == 0:
+                self.assertEqual(index,len(css)-1)
+                break
+        self.assertEqual(depth,0)
+        inline_only=re.sub(r'<style>.*?</style>','',rendered,flags=re.S)
+        for text in ['max-width:900px','background:#111111','background:#fff7f7',
+                     'font-size:28px','border-bottom:2px solid #111827']:
+            self.assertIn(text,inline_only)
+
     def test_firewall_failure_does_not_create_quarantine(self):
         cfg={**self.cfg,'firewall':'iptables','threshold':1}
         fw=Mock()
@@ -268,6 +348,13 @@ class TransportAndHealthTests(unittest.TestCase):
         for field in ['email','email_from','report_hostname']:
             with self.assertRaises(ValueError):
                 validate_config({field:'a@example.com\r\nBcc: other@example.com'})
+
+    def test_recipient_is_bare_but_sender_accepts_display_name(self):
+        with self.assertRaisesRegex(ValueError,'bare recipient'):
+            validate_config({'email':'Admin <admin@example.com>'})
+        cfg=validate_config({'email':'admin@example.com','email_from':'BanWatch <hello@tuloss.com>'})
+        self.assertEqual(cfg['email'],'admin@example.com')
+        self.assertEqual(cfg['email_from'],'BanWatch <hello@tuloss.com>')
 
     def test_iptables_command_does_not_duplicate_executable(self):
         fw=Firewall('iptables')

@@ -348,7 +348,7 @@ sudo systemctl restart banwatch   # apply changes (or: banwatch disable && banwa
 | `firewall` | Backend for blocking IPs | `"iptables"`, `"ufw"`, `"nftables"`, `"none"` |
 | `threshold` | Score threshold for quarantine (see Rules & Severity) | Any integer (default: `5`) |
 | `window` | Time window for counting attempts (seconds) | Any integer (default: `300`) |
-| `email` | Report recipient (optional, `null` to disable) | `"you@domain.com"` or `null` |
+| `email` | One bare recipient address, without a display name (optional, `null` to disable) | `"you@domain.com"` or `null` |
 | `report_frequency` | How often to email reports | `"daily"`, `"weekly"`, `"monthly"` |
 | `dry_run` | Detect and report only, never block | `true` or `false` (default `false`) |
 | `block_private` | Allow quarantining private/loopback IPs | `true` or `false` (default `false`) |
@@ -407,9 +407,11 @@ sudo banwatch test-line ssh "Failed password for root from 1.2.3.4 port 22"
 
 When an IP's cumulative rule weight reaches the threshold (default: score 5 within 300s), it is:
 
-1. **Logged** in `/etc/banwatch/banwatch.db`
-2. **Blocked** via `iptables`, `ufw`, or `nftables`
+1. **Blocked** via `iptables`, `ufw`, or `nftables`
+2. **Logged** as quarantined in `/etc/banwatch/banwatch.db` only after the firewall command succeeds
 3. **Tracked** with score, service, and timestamps
+
+In `dry_run` or with `firewall: "none"`, detection events are still recorded, but no new active quarantine is created. Existing quarantines and firewall rules are retained: manual release and automatic expiration do not run in these modes. In blocking mode, a release or expiration is recorded only after successful firewall removal. A repeat ban reapplies the firewall rule before updating the record, including its latest service and reason.
 
 By default **private IPs are never banned** (RFC1918, loopback, link-local). Set `"block_private": true` in config to allow it — for example on isolated test networks. Trusted ranges in `allowlist` are always skipped first.
 
@@ -450,11 +452,11 @@ Reports include:
 - **IPs ever banned** and **active bans** recorded in SQLite, compared with the previous successful HTML report.
 - **Events in the period**, compared with the preceding equal-duration period: 24 hours, 7 days or 30 days according to `report_frequency`.
 - **Monitored services**, verified from a current daemon heartbeat and the state of every configured log reader. An idle readable log is healthy; a missing, stopped or unverified reader is not.
-- **Service breakdown** with period events, current active counts, reader availability, last read and errors since daemon start.
+- **Service breakdown** with historical totals, current active counts and percentages, period events, reader availability, last read and errors since daemon start.
 - **Top IPs in the period**, with current ban status, reason and expiration; new, repeat, released and expired ban counts.
 - **Read-only firewall checks** identifying active database entries without matching rules. Rule presence does not establish packet-path ordering or effective delivery, and discrepancies are never repaired automatically.
 
-The header and email subject identify the server, report frequency and timezone. The layout switches to two KPI columns on mobile. No repeated containment banner is included.
+The header and email subject identify the server, report frequency and timezone. The original desktop design is retained, including KPI cards, service bars, offender ranks and separate table columns. Base styles are inline; the CSS block contains only mobile rules, including two KPI columns. No repeated containment banner is included.
 
 ```bash
 sudo banwatch report                 # HTML (default)
@@ -466,7 +468,11 @@ Files are saved to `/var/log/banwatch/`. HTML reports can be emailed as multipar
 
 Set `email_from` to an authorized sender (default `BanWatch <hello@tuloss.com>`) and optionally set `report_hostname` to a recognizable server label. These fields are validated to reject header injection. A successful email means the local transport accepted it, not that the recipient received it.
 
-JSON and CSV commands are local exports: they do not send emails/webhooks or update the HTML/email comparison reference. The first successful HTML report establishes that reference. Email failures leave it unchanged; webhook failures do not cause duplicate email retries after an email was accepted. With webhook-only delivery, all configured hooks must accept the report before its reference advances.
+The `email` recipient must be a single bare address, such as `admin@example.com`. Display-name forms such as `Admin <admin@example.com>`, recipient lists, and control characters are rejected. Display names remain supported for the `email_from` sender, such as `BanWatch <hello@tuloss.com>`. Use `null` to disable email reports.
+
+JSON and CSV commands save the requested export and also send the HTML email and/or webhook digest when configured, as before. These exports do not update the HTML/email comparison reference. The first successful HTML-format report establishes that reference. Email failures leave it unchanged; webhook failures do not cause duplicate email retries after an email was accepted. With webhook-only delivery, all configured hooks must accept the report before its reference advances.
+
+The JSON export retains its original top-level fields: `generated_at`, `stats`, `breakdown` (objects containing `service`, `total`, `active`), and `bans`. CSV retains its original seven columns and appends `banned_until`; field values are exported unchanged. Treat exported log-derived text as untrusted when opening CSV files in spreadsheet software.
 
 Automatic report deadlines are persisted in SQLite. Failures retry after 15 minutes, then 30 minutes; after three failed attempts the next normal interval is scheduled. Restarting the daemon no longer postpones an existing deadline.
 
