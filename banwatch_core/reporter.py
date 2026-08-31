@@ -93,7 +93,7 @@ class Reporter:
             html_report = report if format == 'html' else render_html(data)
             subject = 'BanWatch [%s] %s report - %s' % (
                 data['hostname'], self.frequency, datetime.fromtimestamp(data['end']).astimezone().strftime('%Y-%m-%d %Z'))
-            send_email(self.cfg, subject, text, html_report)
+            send_email(self.cfg, subject, render_text(data, compact=True), html_report)
         hooks_ok = send_webhooks(self.cfg.get('webhooks', []), text)
         if not hooks_ok and not self.cfg.get('email'):
             raise ReportDeliveryError('Webhook report was not accepted')

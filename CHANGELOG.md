@@ -4,6 +4,17 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.6.2] - 2026-08-31
+
+### Fixed
+- Shorten the email generation date and reporting periods, retaining explicit month/year and DST boundaries when needed
+- Summarize generated ban reasons as score and event count in HTML and plain-text email; keep stored reasons, JSON/CSV exports and webhook digests unchanged
+- Remove Security Intelligence, Security report, Quarantine status and Events in this period labels from the report
+
+### Unchanged
+- Preserve the desktop design, inline base styles, mobile rules, metrics, comparison references and scheduling
+- No firewall, detection, database or configuration behavior changes
+
 ## [0.6.1] - 2026-08-31
 
 ### Fixed

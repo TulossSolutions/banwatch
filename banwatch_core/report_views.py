@@ -1,4 +1,5 @@
 import html
+import re
 from datetime import datetime
 
 from . import __version__
@@ -16,6 +17,35 @@ def when(timestamp, full=False):
         return value.astimezone().strftime('%Y-%m-%d %H:%M %Z (UTC%z)' if full else '%d %b %H:%M')
     except (ValueError, TypeError, OverflowError, OSError):
         return 'Unknown date'
+
+
+def period_label(start, end, report_year):
+    same_year = start.year == end.year
+    same_month = same_year and start.month == end.month
+    start_format = '%d' if same_month else ('%d %b' if same_year else '%d %b %Y')
+    end_format = '%d %b' if same_year and end.year == report_year else '%d %b %Y'
+    same_time = start.strftime('%H:%M') == end.strftime('%H:%M')
+    same_offset = start.utcoffset() == end.utcoffset()
+    if same_time and same_offset:
+        return '%s\u2013%s, %s' % (start.strftime(start_format), end.strftime(end_format), end.strftime('%H:%M'))
+    # Keep both clock times and zones when an elapsed-time period crosses DST.
+    start_format = '%d %b' if same_year and start.year == report_year else '%d %b %Y'
+    suffix = ', %H:%M' + (' %Z' if not same_offset else '')
+    return '%s \u2013 %s' % (start.strftime(start_format + suffix), end.strftime(end_format + suffix))
+
+
+def report_dates(data):
+    start, end, previous = [datetime.fromtimestamp(stamp).astimezone() for stamp in
+                            (data['start'], data['end'], data['start'] - data['seconds'])]
+    return (end.strftime('%d %b %Y, %H:%M %Z'),
+            period_label(start, end, end.year), period_label(previous, start, end.year))
+
+
+def reason_summary(reason):
+    match = re.fullmatch(r'(\d+) score \((\d+) events\) on [^;\r\n]+(?:; rule:.*)?', reason or '', re.S)
+    if match:
+        return 'Score %s \u00b7 %s events' % match.groups()
+    return reason
 
 
 def delta(value, previous, positive_good=False, neutral=False):
@@ -65,7 +95,7 @@ def service_rows(data):
     return ''.join(rows) or '<tr><td colspan="4" style="padding:14px 0;font-size:13px;">No services configured.</td></tr>'
 
 
-def render_text(data):
+def render_text(data, compact=False):
     stats, fw = data['stats'], data['firewall']
     baseline = data['baseline']
     lines = [
@@ -75,6 +105,9 @@ def render_text(data):
         'Previous period: %s to %s' % (when(data['start']-data['seconds'], True), when(data['start'], True)),
         'Comparison report (%s): %s' % (data['baseline_kind'], when(baseline.get('generated_at'), True) if baseline else 'First report'),
     ]
+    if compact:
+        generated, period, previous = report_dates(data)
+        lines[1:4] = ['Generated ' + generated, 'Period: ' + period, 'Previous: ' + previous]
     for key, label in [('total_entries', 'IPs ever banned'), ('active_quarantined', 'Active bans'), ('monitored', 'Monitored services')]:
         current = data['metrics'][key]
         prior = baseline.get(key)
@@ -94,14 +127,16 @@ def render_text(data):
         lines.append('%s: %s events, %s active bans' % (service,data['events_by_service'].get(service,0),active))
     lines.append('\nTop IPs in period:')
     for row in data['offenders']:
+        reason = reason_summary(row.get('reason')) if compact else row.get('reason')
         lines.append('%s | %s | %s events | %s | %s | expires %s' % (
             row['ip'],row['service'],row['events'],row.get('status') or 'observed',
-            row.get('reason') or '-',when(row.get('banned_until')) if row.get('banned_until') else 'not scheduled'))
+            reason or '-',when(row.get('banned_until')) if row.get('banned_until') else 'not scheduled'))
     return '\n'.join(lines + ['', 'BanWatch v' + __version__])
 
 
 def render_html(data):
     stats, baseline, health, fw = data['stats'], data['baseline'], data['health'], data['firewall']
+    generated, period, previous = report_dates(data)
     cards = [
         (format(stats['total_entries'], ','), 'IPs ever banned', delta(stats['total_entries'],baseline.get('total_entries'),neutral=True)),
         (format(stats['active_quarantined'], ','), 'Active bans', delta(stats['active_quarantined'],baseline.get('active_quarantined'),neutral=True)),
@@ -154,7 +189,7 @@ def render_html(data):
 <td class="offender-meta" style="padding:15px 0 15px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;overflow-wrap:anywhere;font-size:11px;line-height:18px;color:#6b7280;">
 <span class="mobile-label" style="display:none;font-size:10px;">Last seen</span>%s</td></tr>''' % (
             rank_bg, '#ffffff' if rank <= 3 else '#6b7280', rank, esc(row['ip']), esc(state.title()),
-            esc(expiry), esc(row.get('reason') or 'No ban recorded'), esc(row['service'].upper()),
+            esc(expiry), esc(reason_summary(row.get('reason')) or 'No ban recorded'), esc(row['service'].upper()),
             format(row['events'], ','), round(row['events'] / max(max_events, 1) * 100), esc(when(row['last_seen']))))
     top_rows = ''.join(offenders) or '<tr><td colspan="5" style="padding:15px 0;font-size:13px;">No events recorded in this period.</td></tr>'
     actions = ' &nbsp; '.join('<strong>%s</strong> %s' % (format(data['actions'].get(key,0),','), label)
@@ -172,7 +207,7 @@ def render_html(data):
  .rank-cell {display:block!important;float:left;padding:15px 0!important;border:0!important;}
  .ip-cell {display:block!important;padding:15px 0 8px 36px!important;border:0!important;}
  .offender-meta {display:inline-block!important;width:33.333%%!important;box-sizing:border-box;padding:8px 4px 15px!important;border:0!important;}
- .mobile-label {display:block!important;} .section-caption {font-size:9px!important;}
+ .mobile-label {display:block!important;}
 }
 </style></head>
 <body style="margin:0;padding:0;background:#f3f4f6;color:#111827;font-family:Arial,Helvetica,sans-serif;letter-spacing:0;">
@@ -182,16 +217,14 @@ def render_html(data):
 <tr><td class="content" style="padding:28px 32px;background:#111111;color:#ffffff;">
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr>
 <td style="width:42%%;vertical-align:top;"><div style="font-size:20px;line-height:24px;font-weight:800;">Ban<span style="color:#ef4444;">Watch</span></div>
-<div style="font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;margin-top:4px;">Security Intelligence</div>
 <div style="font-size:11px;line-height:17px;color:#d1d5db;margin-top:7px;overflow-wrap:anywhere;word-break:break-all;">%(host)s</div></td>
 <td style="text-align:right;vertical-align:top;"><div style="display:inline-block;border:1px solid #374151;border-radius:999px;padding:6px 10px;font-size:10px;line-height:14px;font-weight:700;">%(frequency)s REPORT</div>
 <div style="font-size:10px;line-height:15px;color:#9ca3af;margin-top:7px;overflow-wrap:anywhere;">Generated %(generated)s</div></td></tr></table>
 </td></tr>
 <tr><td class="content" style="padding:34px 32px 22px;">
-<div style="font-size:10px;line-height:14px;font-weight:700;text-transform:uppercase;color:#dc2626;">Security report</div>
 <h1 style="font-size:28px;line-height:34px;font-weight:800;margin:8px 0 14px;">Threat activity overview</h1>
-<p style="margin:0 0 5px;font-size:12px;line-height:20px;color:#4b5563;">%(period)s</p>
-<p style="margin:0;font-size:11px;line-height:17px;color:#6b7280;">Previous period: %(previous_period)s</p>
+<p style="margin:0 0 5px;font-size:12px;line-height:20px;color:#4b5563;">Period: %(period)s</p>
+<p style="margin:0;font-size:11px;line-height:17px;color:#6b7280;">Previous: %(previous_period)s</p>
 </td></tr>
 <tr><td class="content" style="padding:0 27px 30px;">
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><tr>%(kpis)s</tr></table>
@@ -202,8 +235,7 @@ def render_html(data):
 <p style="font-size:11px;line-height:17px;color:#6b7280;margin:4px 0;">Rule presence checked; packet-path ordering is not audited.</p>
 %(alerts)s
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;border-bottom:2px solid #111827;margin-top:24px;font-family:Arial,Helvetica,sans-serif;"><tr>
-<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Service breakdown</h2></td>
-<td class="section-caption" style="padding:0 0 12px;text-align:right;font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;">Quarantine status</td></tr></table>
+<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Service breakdown</h2></td></tr></table>
 <table width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><thead><tr>
 <th class="service-cell" scope="col" width="26%%" style="padding:12px 0;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">Service</th>
 <th class="service-cell" scope="col" width="16%%" style="padding:12px;text-align:right;font-size:10px;color:#9ca3af;text-transform:uppercase;">Total</th>
@@ -213,8 +245,7 @@ def render_html(data):
 <p style="font-size:12px;line-height:22px;margin:14px 0 3px;">%(actions)s</p>
 <p style="font-size:11px;line-height:17px;color:#6b7280;margin:0;">Ban actions tracked from %(tracking)s within this period.</p>
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;border-bottom:2px solid #111827;margin-top:24px;font-family:Arial,Helvetica,sans-serif;"><tr>
-<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Top offenders</h2></td>
-<td class="section-caption" style="padding:0 0 12px;text-align:right;font-size:10px;line-height:15px;color:#9ca3af;text-transform:uppercase;">Events in this period</td></tr></table>
+<td style="padding:0 0 12px;"><h2 style="font-size:16px;line-height:22px;font-weight:800;margin:0;">Top offenders</h2></td></tr></table>
 <table class="offenders" width="100%%" cellpadding="0" cellspacing="0" border="0" style="width:100%%;table-layout:fixed;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;"><thead><tr>
 <th scope="col" width="6%%" style="padding:12px 0;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">#</th>
 <th scope="col" width="28%%" style="padding:12px 8px;text-align:left;font-size:10px;color:#9ca3af;text-transform:uppercase;">IP address</th>
@@ -234,8 +265,7 @@ def render_html(data):
 <p style="max-width:900px;margin:0;padding:18px 20px;font-size:10px;line-height:15px;color:#9ca3af;">This report was generated by BanWatch. Keep it confidential and intended for authorized recipients only.</p>
 </td></tr></table></body></html>''' % {
         'host': esc(data['hostname']), 'frequency': esc(data['frequency'].upper()),
-        'generated': esc(when(data['end'],True)), 'period': esc(when(data['start'],True) + ' to ' + when(data['end'],True)),
-        'previous_period': esc(when(data['start']-data['seconds'],True) + ' to ' + when(data['start'],True)),
+        'generated': esc(generated), 'period': esc(period), 'previous_period': esc(previous),
         'kpis': kpis, 'reference': esc(reference), 'mode': esc(data['mode']),
         'firewall': esc('%s (%s/%s)' % (fw['status'],fw.get('present','?'),fw['expected'])),
         'alerts': alert, 'services': service_rows(data), 'actions': actions,

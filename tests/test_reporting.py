@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -19,7 +19,7 @@ from banwatch_core import database, monitoring, report_delivery, reporter
 from banwatch_core.config import validate_config
 from banwatch_core.detector import DetectorEngine
 from banwatch_core.firewall import Firewall
-from banwatch_core.report_views import render_html
+from banwatch_core.report_views import period_label, reason_summary, render_html, render_text, report_dates
 
 
 class ReportTests(unittest.TestCase):
@@ -279,13 +279,69 @@ class ReportTests(unittest.TestCase):
         data['offenders']=[{'ip':'203.0.113.9','service':'ssh','events':3,'last_seen':self.end,
                             'status':'quarantined','reason':'<untrusted>','banned_until':self.end+3600}]
         rendered=render_html(data)
-        for text in ['Security Intelligence','Threat activity overview','max-width:900px',
+        for text in ['Threat activity overview','max-width:900px',
                      'background:#fff7f7','>Total</th>','25% still quarantined',
                      '3 events in period','Log readers: 1/1 reading', 'width:26px;height:26px',
                      '>IP address</th>','>Last seen</th>','&lt;untrusted&gt;','Until ',
                      'Automated security monitoring &amp; IP quarantine']:
             self.assertIn(text,rendered)
         self.assertNotIn(' ACTIVE',rendered)
+
+    def test_requested_report_labels_are_removed(self):
+        rendered=self.report.generate_html()
+        for text in ['Security Intelligence','Security report','Quarantine status','Events in this period']:
+            self.assertNotIn(text,rendered)
+        for text in ['Threat activity overview','Service breakdown','Top offenders','Events in period']:
+            self.assertIn(text,rendered)
+
+    def test_compact_period_labels_keep_month_year_and_dst_boundaries(self):
+        summer=timezone(timedelta(hours=2),'CEST')
+        winter=timezone(timedelta(hours=1),'CET')
+        cases=[
+            (datetime(2026,8,30,9,55,tzinfo=summer),datetime(2026,8,31,9,55,tzinfo=summer),2026,'30\u201331 Aug, 09:55'),
+            (datetime(2026,8,31,9,55,tzinfo=summer),datetime(2026,9,1,9,55,tzinfo=summer),2026,'31 Aug\u201301 Sep, 09:55'),
+            (datetime(2025,12,31,9,55,tzinfo=winter),datetime(2026,1,1,9,55,tzinfo=winter),2026,'31 Dec 2025\u201301 Jan 2026, 09:55'),
+            (datetime(2025,12,30,9,55,tzinfo=winter),datetime(2025,12,31,9,55,tzinfo=winter),2026,'30\u201331 Dec 2025, 09:55'),
+            (datetime(2026,3,28,8,55,tzinfo=winter),datetime(2026,3,29,9,55,tzinfo=summer),2026,'28 Mar, 08:55 CET \u2013 29 Mar, 09:55 CEST'),
+            (datetime(2026,10,24,10,55,tzinfo=summer),datetime(2026,10,25,9,55,tzinfo=winter),2026,'24 Oct, 10:55 CEST \u2013 25 Oct, 09:55 CET'),
+        ]
+        for start,end,year,expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(period_label(start,end,year),expected)
+
+    def test_compact_dates_are_used_in_both_email_parts(self):
+        data=self.report.collect()
+        generated,period,previous=report_dates(data)
+        self.assertEqual(generated,datetime.fromtimestamp(data['end']).astimezone().strftime('%d %b %Y, %H:%M %Z'))
+        for rendered in [render_html(data),render_text(data,compact=True)]:
+            for value in ['Generated '+generated,'Period: '+period,'Previous: '+previous]:
+                self.assertIn(value,rendered)
+        self.assertIn('Previous period:',render_text(data))
+
+    def test_compact_reasons_preserve_raw_database_exports_and_webhooks(self):
+        reason=r'8 score (6 events) on ssh; rule: (?P<ip>\d+\.\d+).*secret'
+        self.db.quarantine('203.0.113.1','ssh',reason)
+        self.event(time.time()-1)
+        self.cfg['email']='admin@example.com'
+        self.cfg['webhooks']=[{'url':'https://example.com/hook','type':'generic'}]
+        with patch.object(reporter,'send_email') as send,patch.object(reporter,'send_webhooks',return_value=True) as hooks:
+            self.report.save_and_maybe_email('html')
+        for body in send.call_args.args[2:4]:
+            self.assertIn('Score 8 \u00b7 6 events',body)
+            self.assertNotIn('; rule:',body)
+        self.assertIn(reason,hooks.call_args.args[1])
+        self.assertEqual(self.db.get_ban_list(1)[0]['reason'],reason)
+        self.assertEqual(json.loads(self.report.generate_json())['bans'][0]['reason'],reason)
+        self.assertEqual(list(csv.DictReader(io.StringIO(self.report.generate_csv())))[0]['reason'],reason)
+
+    def test_custom_reasons_remain_unchanged_and_html_escaped(self):
+        for reason in [None,'manual review','<script>custom</script>','Unexpected; rule: custom']:
+            self.assertEqual(reason_summary(reason),reason)
+        self.assertEqual(reason_summary('5 score (6 events) on web'),'Score 5 \u00b7 6 events')
+        data=self.report.collect()
+        data['offenders']=[{'ip':'203.0.113.1','service':'ssh','events':1,'last_seen':self.end,
+                            'reason':'<script>custom</script>'}]
+        self.assertIn('&lt;script&gt;custom&lt;/script&gt;',render_html(data))
 
     def test_stylesheet_contains_only_mobile_rules(self):
         rendered=self.report.generate_html()
