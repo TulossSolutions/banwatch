@@ -271,18 +271,20 @@ class ReportTests(unittest.TestCase):
         self.db.mark_expired('203.0.113.1')
         self.assertEqual([r[0] for r in self.db.conn.execute('SELECT action FROM ban_events')],['ban','release','reban','expire'])
 
-    def test_original_report_design_and_data_are_preserved(self):
+    def test_report_design_and_data_are_preserved(self):
         data=self.report.collect()
         data['breakdown']=[('ssh',8,2)]
         data['events_by_service']={'ssh':3}
+        data['health']['verified']=True
+        data['health']['monitored']=1
         data['health']['services']={'ssh':{'healthy':1,'total':1,'last_read':self.end,'errors':0}}
         data['offenders']=[{'ip':'203.0.113.9','service':'ssh','events':3,'last_seen':self.end,
                             'status':'quarantined','reason':'<untrusted>','banned_until':self.end+3600}]
         rendered=render_html(data)
-        for text in ['Threat activity overview','max-width:900px',
-                     'background:#fff7f7','>Total</th>','25% still quarantined',
-                     '3 events in period','Log readers: 1/1 reading', 'width:26px;height:26px',
-                     '>IP address</th>','>Last seen</th>','&lt;untrusted&gt;','Until ',
+        for text in ['Protection healthy','max-width:640px',
+                     'background:#f0fdf4','>Events</th>','>Active</th>',
+                     '>Health</th>','>OK</span>', 'width:24px;height:24px',
+                     'Top activity','&lt;untrusted&gt;','Quarantined until ',
                      'Automated security monitoring &amp; IP quarantine']:
             self.assertIn(text,rendered)
         self.assertNotIn(' ACTIVE',rendered)
@@ -291,7 +293,7 @@ class ReportTests(unittest.TestCase):
         rendered=self.report.generate_html()
         for text in ['Security Intelligence','Security report','Quarantine status','Events in this period']:
             self.assertNotIn(text,rendered)
-        for text in ['Threat activity overview','Service breakdown','Top offenders','Events in period']:
+        for text in ['Services','Top activity','Events','Active bans']:
             self.assertIn(text,rendered)
 
     def test_compact_period_labels_keep_month_year_and_dst_boundaries(self):
@@ -314,9 +316,9 @@ class ReportTests(unittest.TestCase):
         generated,period,previous=report_dates(data)
         self.assertEqual(generated,datetime.fromtimestamp(data['end']).astimezone().strftime('%d %b %Y, %H:%M %Z'))
         for rendered in [render_html(data),render_text(data,compact=True)]:
-            for value in ['Generated '+generated,'Period: '+period,'Previous: '+previous]:
+            for value in ['Generated: '+generated,period,'Previous: '+previous]:
                 self.assertIn(value,rendered)
-        self.assertIn('Previous period:',render_text(data))
+        self.assertIn('Previous:',render_text(data))
 
     def test_compact_reasons_preserve_raw_database_exports_and_webhooks(self):
         reason=r'8 score (6 events) on ssh; rule: (?P<ip>\d+\.\d+).*secret'
@@ -357,8 +359,8 @@ class ReportTests(unittest.TestCase):
                 break
         self.assertEqual(depth,0)
         inline_only=re.sub(r'<style>.*?</style>','',rendered,flags=re.S)
-        for text in ['max-width:900px','background:#111111','background:#fff7f7',
-                     'font-size:28px','border-bottom:2px solid #111827']:
+        for text in ['max-width:640px','background:#111111','background:#fafafa',
+                     'font-size:30px','border-bottom:2px solid #111827']:
             self.assertIn(text,inline_only)
 
     def test_firewall_failure_does_not_create_quarantine(self):

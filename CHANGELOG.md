@@ -4,6 +4,20 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.7.0] - 2026-09-24
+
+### Changed
+- Redesign the HTML and plain-text reports around a concise protection status, activity summary, service health and top activity
+- Show only the three most active IP addresses and simplify report details for faster review
+- Use a narrower, email-client-safe layout with inline base styles and mobile-only stylesheet rules
+
+### Fixed
+- Preserve raw ban reasons in webhook digests while keeping compact reasons in email reports
+- Keep generated and comparison dates compact in both email parts
+
+### Unchanged
+- Preserve report collection, KPI baselines, JSON/CSV exports, notifications, scheduling, firewall checks and quarantine behavior
+
 ## [0.6.2] - 2026-08-31
 
 ### Fixed
