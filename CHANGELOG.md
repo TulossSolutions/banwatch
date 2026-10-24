@@ -4,6 +4,17 @@ All notable changes to BanWatch are documented in this file.
 
 Versioning: `0.x.y` — **x** increments for new features or behavior changes, **y** for fixes and documentation. Until `1.0.0`, minor releases may still change configuration defaults.
 
+## [0.7.1] - 2026-10-24
+
+### Fixed
+- Reconcile active database quarantines with missing firewall rules when the daemon starts
+- Process elapsed temporary quarantines before restoring active rules
+- Restore missing iptables rules through a validated batch while preserving existing rules
+- Reconcile only missing UFW and nftables rules; dry-run and detection-only modes remain read-only
+
+### Unchanged
+- Preserve quarantine records, existing firewall rules, detection, reports, exports and notification behavior
+
 ## [0.7.0] - 2026-09-24
 
 ### Changed

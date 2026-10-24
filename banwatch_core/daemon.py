@@ -59,6 +59,7 @@ class Daemon:
         if self.cfg.get("dry_run"):
             logging.warning("DRY RUN MODE: detections are logged but no firewall rules are applied")
 
+        self._prepare_firewall()
         self.detector.start()
 
         self.db.next_report_due(self.reporter.scope, self.reporter.interval, time.time())
@@ -88,6 +89,25 @@ class Daemon:
 
     def shutdown(self):
         self._shutdown.set()
+
+    def _prepare_firewall(self):
+        self._expire_due_bans()
+        self._reconcile_firewall()
+
+    def _reconcile_firewall(self):
+        result = self.fw.reconcile(self.db.get_active_ips())
+        if result['status'] == 'detection only':
+            return
+        if result['status'] == 'rules found':
+            logging.info(
+                'Firewall reconciliation complete: %s/%s active rules present (%s restored)',
+                result['present'], result['expected'], result['restored'],
+            )
+        else:
+            logging.error(
+                'Firewall reconciliation incomplete: %s/%s active rules present (%s missing)',
+                result['present'], result['expected'], result['missing'],
+            )
 
     def _expire_due_bans(self):
         """Unblock quarantined IPs whose ban duration has elapsed (repeat offenders are re-banned with escalation)."""

@@ -15,7 +15,7 @@ from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from banwatch_core import database, monitoring, report_delivery, reporter
+from banwatch_core import daemon, database, monitoring, report_delivery, reporter
 from banwatch_core.config import validate_config
 from banwatch_core.detector import DetectorEngine
 from banwatch_core.firewall import Firewall
@@ -271,6 +271,12 @@ class ReportTests(unittest.TestCase):
         self.db.mark_expired('203.0.113.1')
         self.assertEqual([r[0] for r in self.db.conn.execute('SELECT action FROM ban_events')],['ban','release','reban','expire'])
 
+    def test_active_ips_only_returns_quarantined_records(self):
+        self.db.quarantine('203.0.113.2','ssh','active')
+        self.db.quarantine('203.0.113.1','ssh','released')
+        self.db.release('203.0.113.1')
+        self.assertEqual(self.db.get_active_ips(),['203.0.113.2'])
+
     def test_report_design_and_data_are_preserved(self):
         data=self.report.collect()
         data['breakdown']=[('ssh',8,2)]
@@ -430,6 +436,105 @@ class TransportAndHealthTests(unittest.TestCase):
     def test_firewall_check_failure_is_unknown(self):
         with patch('banwatch_core.firewall.subprocess.run',side_effect=OSError('denied')):
             self.assertEqual(Firewall('iptables').audit(['203.0.113.1'])['status'],'unverified')
+
+    def test_iptables_reconciliation_batches_only_missing_rules(self):
+        before='-A INPUT -s 203.0.113.1/32 -j DROP\n'
+        after=before+'-A INPUT -s 203.0.113.2/32 -j DROP\n'
+        snapshots=iter([before,after])
+        restores=[]
+
+        def run(args,**kwargs):
+            if args[0]=='iptables-save':
+                return Mock(returncode=0,stdout=next(snapshots),stderr='')
+            if args[0]=='iptables-restore':
+                restores.append((args,kwargs['input']))
+                return Mock(returncode=0,stdout='',stderr='')
+            raise AssertionError(args)
+
+        with patch('banwatch_core.firewall.subprocess.run',side_effect=run):
+            result=Firewall('iptables').reconcile(['203.0.113.1','203.0.113.2'])
+        self.assertEqual(result,{'status':'rules found','expected':2,'present':2,'missing':0,'restored':1})
+        self.assertEqual([call[0] for call in restores],[
+            ['iptables-restore','--test','--noflush'],
+            ['iptables-restore','--noflush'],
+        ])
+        self.assertNotIn('203.0.113.1',restores[0][1])
+        self.assertIn('-A INPUT -s 203.0.113.2/32 -j DROP',restores[0][1])
+
+    def test_ufw_reconciliation_restores_only_missing_rules(self):
+        snapshots=iter([
+            '-A ufw-user-input -s 203.0.113.1/32 -j DROP\n',
+            '-A ufw-user-input -s 203.0.113.1/32 -j DROP\n-A ufw-user-input -s 203.0.113.2/32 -j DROP\n',
+        ])
+        calls=[]
+
+        def run(args,**kwargs):
+            calls.append(args)
+            if args==['ufw','status']:
+                return Mock(returncode=0,stdout='Status: active\n',stderr='')
+            if args[0]=='iptables-save':
+                return Mock(returncode=0,stdout=next(snapshots),stderr='')
+            if args[:3]==['ufw','deny','from']:
+                return Mock(returncode=0,stdout='',stderr='')
+            raise AssertionError(args)
+
+        with patch('banwatch_core.firewall.subprocess.run',side_effect=run):
+            result=Firewall('ufw').reconcile(['203.0.113.1','203.0.113.2'])
+        self.assertEqual(result['restored'],1)
+        self.assertEqual(result['missing'],0)
+        self.assertIn(['ufw','deny','from','203.0.113.2'],calls)
+
+    def test_nftables_reconciliation_restores_only_missing_elements(self):
+        match={'match':{'op':'==','left':{'payload':{'protocol':'ip','field':'saddr'}},'right':'@banned'}}
+        def snapshot(elements):
+            return json.dumps({'nftables':[
+                {'set':{'name':'banned','elem':elements}},
+                {'chain':{'name':'drop','hook':'input'}},
+                {'rule':{'chain':'drop','expr':[match,{'drop':None}]}},
+            ]})
+        snapshots=iter([snapshot(['203.0.113.1']),snapshot(['203.0.113.1','203.0.113.2'])])
+        calls=[]
+
+        def run(args,**kwargs):
+            calls.append(args)
+            if args[:3]==['nft','-j','list']:
+                return Mock(returncode=0,stdout=next(snapshots),stderr='')
+            if args[:3]==['nft','add','element']:
+                return Mock(returncode=0,stdout='',stderr='')
+            raise AssertionError(args)
+
+        with patch('banwatch_core.firewall.subprocess.run',side_effect=run):
+            result=Firewall('nftables').reconcile(['203.0.113.1','203.0.113.2'])
+        self.assertEqual(result['restored'],1)
+        self.assertEqual(result['missing'],0)
+        self.assertIn(['nft','add','element','inet','banwatch','banned','{','203.0.113.2','}'],calls)
+
+    def test_detection_only_reconciliation_never_calls_firewall(self):
+        with patch('banwatch_core.firewall.subprocess.run') as run:
+            result=Firewall('none').reconcile(['203.0.113.1'])
+        run.assert_not_called()
+        self.assertEqual(result['status'],'detection only')
+
+    def test_daemon_logs_successful_startup_reconciliation(self):
+        instance=daemon.Daemon.__new__(daemon.Daemon)
+        instance.db=Mock()
+        instance.db.get_active_ips.return_value=['203.0.113.1']
+        instance.fw=Mock()
+        instance.fw.reconcile.return_value={
+            'status':'rules found','present':1,'expected':1,'restored':1,'missing':0,
+        }
+        with self.assertLogs(level='INFO') as logs:
+            instance._reconcile_firewall()
+        instance.fw.reconcile.assert_called_once_with(['203.0.113.1'])
+        self.assertIn('1 restored',' '.join(logs.output))
+
+    def test_daemon_processes_expirations_before_reconciliation(self):
+        instance=daemon.Daemon.__new__(daemon.Daemon)
+        calls=Mock()
+        instance._expire_due_bans=calls.expire
+        instance._reconcile_firewall=calls.reconcile
+        instance._prepare_firewall()
+        self.assertEqual(calls.mock_calls,[unittest.mock.call.expire(),unittest.mock.call.reconcile()])
 
     def test_live_stale_and_incomplete_heartbeat(self):
         with tempfile.TemporaryDirectory() as folder:

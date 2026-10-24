@@ -413,6 +413,8 @@ When an IP's cumulative rule weight reaches the threshold (default: score 5 with
 
 In `dry_run` or with `firewall: "none"`, detection events are still recorded, but no new active quarantine is created. Existing quarantines and firewall rules are retained: manual release and automatic expiration do not run in these modes. In blocking mode, a release or expiration is recorded only after successful firewall removal. A repeat ban reapplies the firewall rule before updating the record, including its latest service and reason.
 
+When the daemon starts in blocking mode, BanWatch processes elapsed temporary quarantines, then reconciles the remaining active database quarantines with the selected firewall backend before starting the log readers. Existing rules are retained and only missing rules are restored. A failed or incomplete reconciliation is logged and remains visible in the report warning.
+
 By default **private IPs are never banned** (RFC1918, loopback, link-local). Set `"block_private": true` in config to allow it — for example on isolated test networks. Trusted ranges in `allowlist` are always skipped first.
 
 ### Ban Duration & Escalation
@@ -454,7 +456,7 @@ Reports include:
 - **Monitored services**, verified from a current daemon heartbeat and the state of every configured log reader. An idle readable log is healthy; a missing, stopped or unverified reader is not.
 - **Service breakdown** with historical totals, current active counts and percentages, period events, reader availability, last read and errors since daemon start.
 - **Top IPs in the period**, with current ban status, reason and expiration; new, repeat, released and expired ban counts.
-- **Read-only firewall checks** identifying active database entries without matching rules. Rule presence does not establish packet-path ordering or effective delivery, and discrepancies are never repaired automatically.
+- **Read-only report checks** identifying active database entries without matching rules. Rule presence does not establish packet-path ordering or effective delivery; restoration occurs only during daemon startup reconciliation.
 
 The header and email subject identify the server, report frequency and timezone. The original desktop design is retained, including KPI cards, service bars, offender ranks and separate table columns. Base styles are inline; the CSS block contains only mobile rules, including two KPI columns. No repeated containment banner is included.
 

@@ -139,6 +139,12 @@ class BanwatchDB:
             )
             return cur.fetchone() is not None
 
+    def get_active_ips(self) -> List[str]:
+        with self.lock:
+            return [row[0] for row in self.conn.execute(
+                "SELECT ip FROM bans WHERE status='quarantined' ORDER BY ip"
+            )]
+
     def get_expired(self, now_iso: str = None) -> List[str]:
         """IPs whose quarantine has expired and are still marked quarantined."""
         now_iso = now_iso or datetime.now().isoformat()
